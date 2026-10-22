@@ -65,6 +65,10 @@ DEFAULTS: dict[str, Any] = {
         "danbooru_login": "",
         "danbooru_api_key": "",
     },
+    "privacy": {
+        # delete Gradio/Forge temporary image copies when the WebUI starts
+        "clean_temp_on_start": False,
+    },
     "output": {
         "quality_prefix": "",
         "negative_prompt": "low quality, worst quality, watermark, score_1, score_2, score_3",

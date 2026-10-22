@@ -67,6 +67,7 @@ on first run and is excluded from git.
 | Tagger | WD v3 model, download, custom model folder, GPU on/off, device id, unload on Generate (thresholds are the sliders in *Tagger thresholds*) |
 | Danbooru | Optional username + API key (public posts work without) |
 | Output | Underscores, parentheses escaping, duplicate removal, max tags |
+| Privacy | Delete all temporary images when the WebUI starts (see *Privacy* below) |
 
 ### Tagger and GPU
 
@@ -217,6 +218,19 @@ reasoning are not affected at all.
 - No telemetry, analytics or tracking of any kind.
 - Personal settings, API keys and logs stay in `settings.json` and
   `anima.log`, both excluded from git.
+- **Temporary copies on disk.** To show an image in the browser, the WebUI
+  (Gradio) keeps a copy of it in a temporary folder (`%TEMP%\gradio` on
+  Windows, plus Forge's `tmp`). This applies to everything shown in the WebUI,
+  including your generated images, and those copies are normally never
+  deleted. This extension:
+  - downloads Danbooru previews into memory (the WebUI still makes its own
+    display copy, which is removed by the cleanup below);
+  - deletes the temporary copy of an image right after tagging it (the
+    picture stays in memory, so you can tag it again);
+  - optionally (*Settings → Privacy*, off by default) deletes **all**
+    temporary images when the WebUI starts. Forge's output folders are never
+    touched. If you run two WebUI instances at the same time, starting the
+    second one also clears the first one's temporary images.
 
 ## Troubleshooting
 

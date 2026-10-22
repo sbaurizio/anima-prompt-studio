@@ -102,6 +102,137 @@ if AVAILABLE:
 
 
 # --------------------------------------------------------------------------- #
+# Temporary image copies
+# --------------------------------------------------------------------------- #
+# To show an image in the browser, Gradio keeps a copy of it on disk: uploads
+# go to its upload folder (%TEMP%\gradio by default), images we display go to
+# Forge's temp_dir. The tagger only needs the picture in memory, so the copy
+# used for tagging is deleted right away, and optionally every leftover copy
+# is deleted when the WebUI starts.
+
+_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
+_LAST_IMAGE: dict[str, object] = {"path": None, "image": None}
+
+
+def _temp_dirs() -> list[pathlib.Path]:
+    dirs: list[pathlib.Path] = []
+    try:
+        from gradio.utils import get_upload_folder
+        dirs.append(pathlib.Path(get_upload_folder()).resolve())
+    except Exception:
+        pass
+    try:
+        from modules import shared
+        if getattr(shared.opts, "temp_dir", ""):
+            dirs.append(pathlib.Path(shared.opts.temp_dir).resolve())
+    except Exception:
+        pass
+    return dirs
+
+
+def _is_temp_copy(path: pathlib.Path) -> bool:
+    try:
+        p = path.resolve()
+        return any(p.is_relative_to(d) for d in _temp_dirs())
+    except Exception:
+        return False
+
+
+def _delete_temp_copy(path: pathlib.Path) -> None:
+    """Delete a Gradio/Forge temporary copy; never touches other files."""
+    if not _is_temp_copy(path):
+        return
+    for _ in range(3):
+        try:
+            path.unlink(missing_ok=True)
+            return
+        except PermissionError:
+            # PIL may still hold the file open on Windows
+            import gc
+            gc.collect()
+            time.sleep(0.2)
+        except Exception:
+            return
+
+
+def _track_image_source(component) -> None:
+    """Remember which file each image passed to the tagger came from.
+
+    Gradio opens the temporary copy and hands us only the picture. Wrapping
+    the component's preprocess lets us attach the path, so the copy can be
+    deleted after tagging. If the browser sends the same (now deleted) file
+    again, the picture kept in memory is reused.
+    """
+    original = component.preprocess
+
+    def preprocess(payload):
+        if payload is not None:
+            src = str(getattr(payload, "path", "") or "")
+            if src and not pathlib.Path(src).exists() and src == _LAST_IMAGE["path"]:
+                return _LAST_IMAGE["image"]
+        img = original(payload)
+        if img is not None and payload is not None:
+            try:
+                img.info["anima_source"] = str(payload.path)
+            except Exception:
+                pass
+        return img
+
+    component.preprocess = preprocess
+
+
+def _output_dirs() -> list[pathlib.Path]:
+    """Folders where Forge saves images: never cleaned, whatever the settings."""
+    out = [pathlib.Path("output").resolve(), pathlib.Path("outputs").resolve()]
+    try:
+        from modules import shared
+        for key in ("outdir_samples", "outdir_txt2img_samples", "outdir_img2img_samples",
+                    "outdir_extras_samples", "outdir_grids", "outdir_txt2img_grids",
+                    "outdir_img2img_grids", "outdir_save", "outdir_init_images"):
+            value = getattr(shared.opts, key, "")
+            if value:
+                out.append(pathlib.Path(value).resolve())
+    except Exception:
+        pass
+    return out
+
+
+def _clean_temp_on_start() -> None:
+    """Delete leftover temporary images once per WebUI process (if enabled)."""
+    import os
+    if not (AVAILABLE and CFG.get("privacy", "clean_temp_on_start", default=False)):
+        return
+    if os.environ.get("ANIMA_PS_TEMP_CLEANED"):  # not again on "Reload UI"
+        return
+    os.environ["ANIMA_PS_TEMP_CLEANED"] = "1"
+    outputs = _output_dirs()
+    removed = 0
+    for d in _temp_dirs():
+        if not d.is_dir():
+            continue
+        if any(o == d or o.is_relative_to(d) or d.is_relative_to(o) for o in outputs):
+            _log(f"startup: skipped {d}: it overlaps an output folder")
+            continue
+        for f in d.rglob("*"):
+            if f.is_file() and f.suffix.lower() in _IMAGE_EXTS:
+                try:
+                    f.unlink()
+                    removed += 1
+                except Exception:
+                    pass
+        # drop the empty per-file folders Gradio creates
+        for sub in sorted((p for p in d.rglob("*") if p.is_dir()), key=lambda p: len(p.parts), reverse=True):
+            try:
+                sub.rmdir()
+            except OSError:
+                pass
+    _log(f"startup: removed {removed} temporary image(s)")
+
+
+_clean_temp_on_start()
+
+
+# --------------------------------------------------------------------------- #
 # 1. Capture Forge's prompt fields
 # --------------------------------------------------------------------------- #
 
@@ -204,6 +335,11 @@ def do_tag_image(img, gen_thr, char_thr):
     """Image -> tags with the local tagger. Returns tags, positive, negative, status."""
     if img is None:
         return gr.update(), "", "", "⚠️ load an image first"
+    # keep the picture in memory and delete the temporary copy on disk
+    src = img.info.get("anima_source") if hasattr(img, "info") else None
+    if src:
+        _LAST_IMAGE.update(path=src, image=img)
+        _delete_temp_copy(pathlib.Path(src))
     try:
         svc = get_tagger()
         svc.ready.wait(timeout=180)
@@ -380,6 +516,7 @@ SETTINGS_FIELDS = [
     ("booru", "danbooru_login"), ("booru", "danbooru_api_key"),
     ("output", "underscores"), ("output", "escape_parens"),
     ("output", "max_tags"), ("output", "dedupe"),
+    ("privacy", "clean_temp_on_start"),
 ]
 
 _TAGGER_KEYS = {("tagger", "model_repo"), ("tagger", "model_dir"),
@@ -505,6 +642,7 @@ class AnimaPromptStudio(scripts.Script):
                         sources=["upload", "clipboard"],
                         elem_id=f"anima_img_{tab}",
                     )
+                    _track_image_source(img_in)
                 with gr.Column(scale=2):
                     url_in = gr.Textbox(
                         label="or Danbooru post URL",
@@ -754,6 +892,19 @@ class AnimaPromptStudio(scripts.Script):
                     o_ded = gr.Checkbox(label="Remove duplicates", value=c("output", "dedupe"))
                 o_max = gr.Number(label="Max tags (0 = no limit)", precision=0, value=c("output", "max_tags"))
 
+            with gr.Tab("Privacy"):
+                gr.Markdown(
+                    "To show an image in the browser, the WebUI keeps a temporary copy on "
+                    "disk (Gradio's folder, `%TEMP%\\gradio` on Windows, and Forge's `tmp`). "
+                    "The copy of an image you tag here is always deleted right after "
+                    "tagging. Copies of everything else shown in the WebUI — uploads, "
+                    "previews, **your generated images** — stay until deleted.\n\n"
+                    "With the option below, every temporary image is deleted when the WebUI "
+                    "starts. Your saved images in `outputs` are never touched."
+                )
+                p_clean = gr.Checkbox(label="Delete all temporary images when the WebUI starts",
+                                      value=c("privacy", "clean_temp_on_start"))
+
             with gr.Row():
                 btn_save = gr.Button("Save settings", variant="primary")
             settings_md = gr.Markdown("")
@@ -765,6 +916,7 @@ class AnimaPromptStudio(scripts.Script):
             t_repo, t_dir, t_gpu, t_dev, t_unload, gen_sl, char_sl,
             b_login, b_key,
             o_us, o_par, o_max, o_ded,
+            p_clean,
         ]
         assert len(fields) == len(SETTINGS_FIELDS)
 
