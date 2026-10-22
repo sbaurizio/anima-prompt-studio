@@ -1,0 +1,12 @@
+# personal settings (server address, API keys, model paths, default prompts)
+settings.json
+
+# downloaded at runtime
+vendor/
+models/
+
+# local logs and caches
+*.log
+__pycache__/
+*.pyc
+*.part
