@@ -67,7 +67,7 @@ on first run and is excluded from git.
 | Tagger | WD v3 model, download, custom model folder, GPU on/off, device id, unload on Generate (thresholds are the sliders in *Tagger thresholds*) |
 | Danbooru | Optional username + API key (public posts work without) |
 | Output | Underscores, parentheses escaping, duplicate removal, max tags |
-| Privacy | Delete all temporary images when the WebUI starts (see *Privacy* below) |
+| Privacy | Delete all temporary images when the WebUI closes and starts (see *Privacy* below) |
 
 ### Tagger and GPU
 
@@ -228,9 +228,12 @@ reasoning are not affected at all.
   - deletes the temporary copy of an image right after tagging it (the
     picture stays in memory, so you can tag it again);
   - optionally (*Settings → Privacy*, off by default) deletes **all**
-    temporary images when the WebUI starts. Forge's output folders are never
-    touched. If you run two WebUI instances at the same time, starting the
-    second one also clears the first one's temporary images.
+    temporary images when the WebUI closes — Ctrl+C, restart, or closing its
+    console window — and again when it starts, as a safety net for crashes
+    or a killed process (which cannot run anything on exit). Forge's output
+    folders are never touched. If you run two WebUI instances at the same
+    time, closing or starting one also clears the other one's temporary
+    images.
 
 ## Troubleshooting
 

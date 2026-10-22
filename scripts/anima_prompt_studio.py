@@ -77,6 +77,7 @@ try:
     from anima_core.tagger import (KNOWN_TAGGERS, TaggerService,    # noqa: E402
                                    download_model, model_present)
     from anima_core.textutils import split_tags                     # noqa: E402
+    from anima_core import tempclean                                # noqa: E402
 
     CFG = Config()
     SERVER = ServerManager(CFG, logger=_log)
@@ -110,7 +111,6 @@ if AVAILABLE:
 # used for tagging is deleted right away, and optionally every leftover copy
 # is deleted when the WebUI starts.
 
-_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 _LAST_IMAGE: dict[str, object] = {"path": None, "image": None}
 
 
@@ -197,39 +197,29 @@ def _output_dirs() -> list[pathlib.Path]:
     return out
 
 
-def _clean_temp_on_start() -> None:
-    """Delete leftover temporary images once per WebUI process (if enabled)."""
+def _setup_temp_cleanup() -> None:
+    """Delete temporary images when the WebUI starts and when it closes.
+
+    Runs once per WebUI process, not again on "Reload UI". The folders are
+    resolved now, while Forge's settings are loaded; the setting itself is
+    read again at exit, so turning it off takes effect without a restart.
+    """
     import os
-    if not (AVAILABLE and CFG.get("privacy", "clean_temp_on_start", default=False)):
+    if not AVAILABLE or os.environ.get("ANIMA_PS_TEMP_CLEANUP"):
         return
-    if os.environ.get("ANIMA_PS_TEMP_CLEANED"):  # not again on "Reload UI"
-        return
-    os.environ["ANIMA_PS_TEMP_CLEANED"] = "1"
-    outputs = _output_dirs()
-    removed = 0
-    for d in _temp_dirs():
-        if not d.is_dir():
-            continue
-        if any(o == d or o.is_relative_to(d) or d.is_relative_to(o) for o in outputs):
-            _log(f"startup: skipped {d}: it overlaps an output folder")
-            continue
-        for f in d.rglob("*"):
-            if f.is_file() and f.suffix.lower() in _IMAGE_EXTS:
-                try:
-                    f.unlink()
-                    removed += 1
-                except Exception:
-                    pass
-        # drop the empty per-file folders Gradio creates
-        for sub in sorted((p for p in d.rglob("*") if p.is_dir()), key=lambda p: len(p.parts), reverse=True):
-            try:
-                sub.rmdir()
-            except OSError:
-                pass
-    _log(f"startup: removed {removed} temporary image(s)")
+    os.environ["ANIMA_PS_TEMP_CLEANUP"] = "1"
+    dirs, outputs = _temp_dirs(), _output_dirs()
+
+    def clean(when: str) -> None:
+        if CFG.get("privacy", "clean_temp_on_start", default=False):
+            n = tempclean.clean_dirs(dirs, outputs, log=lambda m: _log(f"{when}: {m}"))
+            _log(f"{when}: removed {n} temporary image(s)")
+
+    clean("startup")
+    tempclean.on_exit(lambda: clean("exit"))
 
 
-_clean_temp_on_start()
+_setup_temp_cleanup()
 
 
 # --------------------------------------------------------------------------- #
@@ -900,9 +890,11 @@ class AnimaPromptStudio(scripts.Script):
                     "tagging. Copies of everything else shown in the WebUI — uploads, "
                     "previews, **your generated images** — stay until deleted.\n\n"
                     "With the option below, every temporary image is deleted when the WebUI "
-                    "starts. Your saved images in `outputs` are never touched."
+                    "closes (Ctrl+C, restart, or closing its console window) and again when "
+                    "it starts, in case it crashed or was killed. Your saved images in "
+                    "`outputs` are never touched."
                 )
-                p_clean = gr.Checkbox(label="Delete all temporary images when the WebUI starts",
+                p_clean = gr.Checkbox(label="Delete all temporary images when the WebUI closes and starts",
                                       value=c("privacy", "clean_temp_on_start"))
 
             with gr.Row():
