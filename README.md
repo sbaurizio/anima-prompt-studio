@@ -246,6 +246,10 @@ reasoning are not affected at all.
   wrong; use *Fetch models / test connection*.
 - **Empty answers from a reasoning model**: enable *Disable thinking* or raise
   *Max tokens*.
+- **The clipboard button doesn't paste**: the browser may be blocking clipboard
+  access (allow it from the icon left of the address bar), or the clipboard
+  holds a copied file rather than an image. Clicking the page and pressing
+  **Ctrl+V** works in both cases.
 - **Tagging is slow / the status says CPU**: see *Tagger and GPU* above
   (driver, *GPU device id*, or Linux without `onnxruntime-gpu`).
 - `anima.log` in the extension folder records errors and server start/stop.
