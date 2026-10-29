@@ -1,13 +1,15 @@
 # Anima Prompt Studio
 
 An extension for **Stable Diffusion WebUI Forge (Neo)** that turns an image or a
-Danbooru post into a ready-to-use prompt, and sends it to the positive or
+Danbooru post into a ready-to-use prompt, lets you add any Danbooru character
+or artist from an offline database, and sends the result to the positive or
 negative prompt field with one click.
 
 ```
 image             ->  WD tagger (runs locally)  ┐
-Danbooru post URL ->  Danbooru API              ├─> tags ─> (optional LLM) ─> prompt ─> Forge
-an idea           ->  your language model       ┘
+Danbooru post URL ->  Danbooru API              │
+an idea           ->  your language model       ├─> tags ─> (optional LLM) ─> prompt ─> Forge
+character/artist  ->  local database (offline)  ┘
 ```
 
 Made for anime models such as Anima, Illustrious and NoobAI, but the output is
@@ -25,6 +27,20 @@ plain Danbooru tags, so it works with any tag-based model.
   rather than the picture (`commentary`, `translated`, `bad_id`…) are left
   out; `highres` and `absurdres` are kept.
 - **Pick the tags you want**: uncheck tags and the prompt rebuilds itself.
+- **No watermarks or signatures**: tags about text and marks on the picture
+  (`watermark`, `signature`, `artist name`, `patreon username`,
+  `twitter username`, `web address`, logos, `dated`…) and censorship tags
+  (`censored`, `uncensored`, `censorship`, `mosaic censoring`, `bar censor`…)
+  are always left out, so the model does not draw them. The artist tags of Danbooru posts are left
+  out too, unless *Settings → Output → Keep artist tags* is on.
+- **Characters & artists (offline)**: search ~245,000 Danbooru characters and
+  ~420,000 artists in a local database, and add a character (name, series and
+  appearance tags) or an artist (`@name`) to the tag list with one click.
+- **Swap the character**: *Remove character tags* unchecks the tags that
+  describe who is in the picture (name, series, hair, eyes, ears, wings…) and
+  what they wear (clothes, shoes, accessories), and keeps pose, expression
+  and background, so you can put a different character, with their own
+  outfit, into the same scene.
 - **Refine with an LLM** (optional): clean up and enrich the tags, or rewrite
   them as a natural-language prompt.
 - **Expand an idea**: describe a scene in any language and get a full tag set.
@@ -53,6 +69,9 @@ plain Danbooru tags, so it works with any tag-based model.
 4. Open **Settings → Tagger** and press **Download model** (once, ~1.2 GB for
    EVA02-Large; smaller models are in the list), or point *Custom model folder*
    to a folder that already contains `model.onnx` and `selected_tags.csv`.
+5. For the character/artist search: open **Settings → Tag browser** and press
+   **Download data** (once, ~70 MB), or copy the files yourself (see
+   *Characters & artists* below).
 
 ## Settings
 
@@ -66,7 +85,8 @@ on first run and is excluded from git.
 | Auto start/stop | Optional: path to `llama-server`, `.gguf` model, context size, GPU layers, extra arguments, stop on Generate |
 | Tagger | WD v3 model, download, custom model folder, GPU on/off, device id, unload on Generate (thresholds are the sliders in *Tagger thresholds*) |
 | Danbooru | Optional username + API key (public posts work without) |
-| Output | Underscores, parentheses escaping, duplicate removal, max tags |
+| Output | Underscores, parentheses escaping, duplicate removal, max tags (also applied to characters and artists), keep the artist tags of Danbooru posts (off by default) |
+| Tag browser | Data folder for the character/artist database, *Download data*, *Check data* |
 | Privacy | Delete all temporary images when the WebUI closes and starts (see *Privacy* below) |
 
 ### Tagger and GPU
@@ -181,6 +201,87 @@ llama.cpp is **not** included in this extension: you install it separately
 (or use the copy shipped with another app), and the extension only launches
 that executable.
 
+### Characters & artists (offline)
+
+Open **Characters & artists (offline)** under the tag list.
+
+1. Choose *Characters* or *Artists* and type a name or tags (comma = AND,
+   e.g. `blue hair, twintails`); *Series* and *Minimum posts on Danbooru*
+   narrow the results. Results are sorted by popularity, 50 per page.
+2. Click a row: the preview (if a thumbnail exists), the series and the tags
+   that will be added appear. You can edit those tags before adding them;
+   *Include appearance tags* adds the character's hair, eyes, outfit…
+3. **Add to tags** puts them at the start of the tag list; the Positive prompt
+   rebuilds itself (default prefix, parentheses escaping and duplicate
+   removal from *Settings → Output* apply). Then **Send positive to Forge**.
+   - *Replace the previous character/artist* (on by default): a new character
+     replaces the character added before, a new artist the artist added before,
+     so you can have one of each.
+   - *Remove the image's character tags when adding a character* (on by
+     default): see below.
+4. **Remove from tags** takes out the character (or artist, depending on
+   *Type*) added from the browser. Tags that were also in the image stay.
+
+Tags added from the browser stay in the list when you tag another image or
+analyze another post, so you can try the same character in different scenes.
+
+**Remove character tags** (next to *Refine with LLM*) unchecks the tags of the
+character in the image or post, which you can check again by hand:
+
+- tags that Danbooru or the tagger mark as *character* or *copyright*;
+- the appearance tags the database lists for that character (e.g. for
+  Hatsune Miku: aqua hair, twintails, detached sleeves…);
+- body traits by pattern: hair color/length/style, eye color, skin, animal
+  ears, horns, tails, wings, halo, fangs, moles, breast size;
+- clothing and accessories, recognized by their last word: `white dress`,
+  `black pantyhose`, `brown footwear`, `dangle earrings`, `long sleeves`,
+  `hair ornament`, `glasses`…
+
+People counts (`1girl`, `solo`…), pose, expression, background, objects
+(`holding sword`, `bow (weapon)`) and artist tags are kept, as are the tags
+you added from the browser.
+
+#### Data
+
+Everything lives in the extension's own `data/` folder (excluded from git); a
+different folder can be set in *Settings → Tag browser*.
+
+```
+data/
+  noob-wiki/danbooru_character.csv   <- Hugging Face: Laxhar/noob-wiki
+  noob-wiki/danbooru_artist.csv
+  characters/thumbs/<trigger>.webp   (optional thumbnails)
+  artists/thumbs/<trigger>.webp
+  tags.sqlite                        (built automatically)
+```
+
+*Download data* fetches the two CSV files from the public dataset
+[Laxhar/noob-wiki](https://huggingface.co/datasets/Laxhar/noob-wiki) (no
+account needed) and builds `tags.sqlite`. To do it by hand, from the extension
+folder in PowerShell:
+
+```powershell
+New-Item -ItemType Directory -Force data\noob-wiki
+curl.exe -L -o data\noob-wiki\danbooru_character.csv https://huggingface.co/datasets/Laxhar/noob-wiki/resolve/main/danbooru_character.csv
+curl.exe -L -o data\noob-wiki\danbooru_artist.csv https://huggingface.co/datasets/Laxhar/noob-wiki/resolve/main/danbooru_artist.csv
+```
+
+The database is built on the first search (a few seconds). After replacing a
+CSV press **Rebuild database from CSV**.
+
+**Your own CSV**: the file names must be `danbooru_character.csv` and
+`danbooru_artist.csv` (UTF-8, header row, values with commas in quotes).
+Extra columns are ignored.
+
+| File | Columns |
+|---|---|
+| characters | `character` (required, unique), `trigger` (name shown and inserted), `copyright` (series), `core_tags` (appearance tags), `count` (popularity: sort order and *Minimum posts*) |
+| artists | `artist` (required, unique), `trigger`, `count` |
+
+**Thumbnails** (optional) are matched by name:
+`data/characters/thumbs/<trigger>.webp` (the characters `< > : " / \ | ? *`
+in the trigger are replaced by `_`). Without a thumbnail the preview is empty.
+
 ### Prompts sent to the language model
 
 The same instructions are sent to every model, whatever server you use. They
@@ -212,9 +313,12 @@ reasoning are not affected at all.
 - Network requests happen only when you ask for them:
   - Danbooru: the post you pasted, and its image for the preview
     (`danbooru.donmai.us`, `cdn.donmai.us`);
-  - Hugging Face: the tagger model files, when you press *Download model*;
+  - Hugging Face: the tagger model files, when you press *Download model*,
+    and the two character/artist CSV files, when you press *Download data*;
   - your inference server: the tags/idea you send to it, at the URL you set;
   - PyPI: `onnxruntime-directml`, once, on Windows during install.
+- Searching characters and artists never uses the network: it reads the
+  local database only.
 - No telemetry, analytics or tracking of any kind.
 - Personal settings, API keys and logs stay in `settings.json` and
   `anima.log`, both excluded from git.
@@ -234,6 +338,87 @@ reasoning are not affected at all.
     folders are never touched. If you run two WebUI instances at the same
     time, closing or starting one also clears the other one's temporary
     images.
+  - character/artist thumbnails are read into memory; the file in `data/`
+    is never changed (the WebUI's display copy is cleaned the same way).
+
+## Security checks
+
+What the extension does to protect your WebUI, your PC and your data. Each
+point is in the code and can be checked there.
+
+**WebUI and Python environment**
+
+- The WebUI virtual environment is never modified: `install.py` installs only
+  `onnxruntime-directml`, with `--no-deps`, into the extension's own `vendor/`
+  folder, and only on Windows. `vendor/` is put on `sys.path` by this
+  extension only.
+- The bundled modules are loaded under the private package name
+  `anima_core`, so they cannot replace or clash with modules of Forge or of
+  other extensions.
+- Any error while loading disables the extension and shows the error in its
+  panel; the WebUI keeps working.
+- The panel never changes image generation: it passes nothing to Forge's
+  processing, it only writes text into the prompt fields when you press a
+  *Send* button.
+
+**Network**
+
+- No request happens by itself; each one is started by a button (list in
+  *Privacy* above). No telemetry.
+- Danbooru: only the hosts `danbooru.donmai.us` and its official mirrors are
+  accepted for a post link, the post id must be a number, and the preview
+  image is downloaded only over `https` from Danbooru's own servers
+  (`*.donmai.us`), whatever URL the API answer contains.
+- Cloudflare's anti-bot check is never bypassed: when it answers, the
+  extension stops and offers *Paste Danbooru post data*, where your own
+  browser fetches the page. The pasted text is only read as JSON data (it is
+  never run) and must look like a Danbooru post.
+- Hugging Face: only the fixed file names of the chosen tagger model and of
+  the `Laxhar/noob-wiki` dataset are requested; nothing about you is sent.
+  Downloads go to a `.part` file first, so an interrupted download never
+  leaves a broken model or CSV.
+- Language model: only the server URL you set is contacted, and only by
+  *Refine*, *Expand idea*, *Fetch models* and *Check status*.
+
+**Character/artist database**
+
+- Searches are offline and use parameterized SQL queries: what you type is
+  never pasted into the query, so it cannot change it. The table name comes
+  from a fixed list, never from the user. Paging values are parameters too,
+  and `%` / `_` you type are searched literally, not as wildcards.
+- The database is opened **read-only** for searches; it is written only by
+  *Rebuild database* / *Download data*, from the local CSV files, into a
+  temporary file that replaces the old one only when complete. Building and
+  searching never run at the same time, so a rebuild cannot break a search
+  or leave a half-written database.
+- Thumbnail file names are built from the character name with every
+  character that is not allowed in a file name (`< > : " / \ | ? *`) replaced,
+  including the path separators, and `.webp` added, so a name can never
+  point outside the `thumbs` folder.
+
+**Programs started by the extension**
+
+- `llama-server` is started only if you enable *Auto start/stop* and set its
+  path; it is run directly, without a shell, with its arguments passed as a
+  list, and tied to the WebUI process so it closes with it.
+- Only the process started by the extension, or a leftover process named
+  `llama-server` on the same port, is ever stopped. A port already used by
+  another program is never taken over.
+- No code from the network, from data files or from settings is ever run:
+  there is no `eval`/`exec`, and no `pickle` loading.
+
+**Your data and files**
+
+- Settings, server addresses, model paths and API keys are stored only in
+  `settings.json` in the extension folder; logs only in `anima.log`. Both,
+  plus `models/`, `vendor/` and `data/`, are excluded from git.
+- API key fields are password fields (hidden on screen).
+- The panel's fields are not saved to Forge's `ui-config.json`, so API keys
+  never end up there and saved settings are not overwritten by stale values.
+- Temporary image cleanup deletes only image files inside Gradio's and
+  Forge's temporary folders, and skips any folder that overlaps Forge's output
+  folders: your saved images are never touched.
+- The temporary copy of an image you tag is deleted right after tagging.
 
 ## Troubleshooting
 
@@ -252,6 +437,27 @@ reasoning are not affected at all.
   **Ctrl+V** works in both cases.
 - **Tagging is slow / the status says CPU**: see *Tagger and GPU* above
   (driver, *GPU device id*, or Linux without `onnxruntime-gpu`).
+- **"Danbooru's protection (Cloudflare) is blocking requests"** when analyzing
+  a link: Danbooru sits behind Cloudflare, which sometimes shows an anti-bot
+  check ("Just a moment…") to a whole internet connection. Only a real browser
+  can pass it, and the extension never tries to get around it. It is not a
+  setting of the extension and the DNS you use does not matter: it depends on
+  your public IP. It usually goes away by itself; restarting the router (most
+  providers then give a new IP) or another network (e.g. a phone hotspot)
+  helps. Meanwhile use **Paste Danbooru post data** (under *Analyze URL*):
+  1. open the post in your browser (it passes the check): the normal page
+     works, and so does the `.json` link shown in the status line;
+  2. press **Ctrl+A** then **Ctrl+C** (Firefox: open the *Raw Data* tab first);
+  3. paste into *Paste Danbooru post data* and press **Read pasted data**.
+  You get the same tags as *Analyze URL* (read from the tag list on the page,
+  or from the JSON), with the same filters. If the
+  preview is blocked too, drop the image saved from the browser into *Image*.
+- **"Danbooru answered 403 (Forbidden)"** without the message above: the post
+  may be restricted, or the username/API key in *Settings → Danbooru* is wrong.
+- **The character search says "no CSV found"**: press *Download data* in
+  *Settings → Tag browser*, or copy the CSV files into `data/noob-wiki/`.
+- **The preview of a character is empty**: there is no thumbnail for it in
+  `data/characters/thumbs/` (they are optional).
 - `anima.log` in the extension folder records errors and server start/stop.
 
 ## Uninstall
@@ -263,6 +469,8 @@ Nothing else is touched.
 
 - WD v3 taggers by [SmilingWolf](https://huggingface.co/SmilingWolf) (downloaded on demand)
 - [ONNX Runtime](https://onnxruntime.ai) with DirectML (installed by `install.py`)
+- Character and artist data: the [Laxhar/noob-wiki](https://huggingface.co/datasets/Laxhar/noob-wiki)
+  dataset (downloaded on demand)
 
 Works with, but does not include:
 

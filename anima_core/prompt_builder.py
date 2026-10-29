@@ -1,9 +1,30 @@
 """Assemble the final prompt in the format anime models expect."""
 from __future__ import annotations
 
+import re
 from typing import Any, Iterable
 
 from .textutils import KAOMOJI, dedupe_ci, normalize_tags
+
+# Tags about text and marks drawn on the picture (watermarks, signatures,
+# usernames, logos): they make the model draw them, so they are left out.
+_SITES = r"(?:patreon|twitter|pixiv|fanbox|fantia|instagram|weibo|tumblr|deviantart|artstation|gumroad|ko-fi|youtube|tiktok|bluesky|skeb|subscribestar)"
+UNWANTED = re.compile(
+    r"^(?:(?:sample |text |artist )?watermark|watermarked|signature|artist signature|"
+    r"artist name|character name|copyright name|group name|dated|username|"
+    rf"{_SITES} (?:username|logo|reward|id)|{_SITES}|artist logo|company logo|"
+    r"web address|url|copyright notice|commission(?:er name)?|"
+    r"paid reward(?: available)?|reward available|logo)$"
+)
+
+
+# censorship tags: censored, uncensored, censorship, mosaic censoring, bar censor…
+CENSORSHIP = re.compile(r"\b(?:un|de)?censor")
+
+
+def is_unwanted(tag: str) -> bool:
+    t = (tag or "").replace("_", " ").strip().lower()
+    return bool(UNWANTED.match(t) or CENSORSHIP.search(t))
 
 # Danbooru rating -> readable label
 RATING_LABEL = {
@@ -56,13 +77,14 @@ KEEP_META = {"highres", "absurdres", "incredibly_absurdres"}
 def from_booru(result, cfg) -> dict[str, Any]:
     """Build the prompt from a BooruResult."""
     meta = [t for t in result.meta if t in KEEP_META]
+    artist = result.artist if cfg.get("output", "keep_artist", default=False) else []
     ordered: list[str] = []
-    for group in (result.character, result.copyright, result.artist,
+    for group in (result.character, result.copyright, artist,
                   result.general, meta):
         for t in group:
             # spaces instead of underscores, like the local tagger shows them
             t = t if t in KAOMOJI else t.replace("_", " ")
-            if t and t not in ordered:
+            if t and t not in ordered and not is_unwanted(t):
                 ordered.append(t)
     return {
         "positive": build_positive(ordered, cfg),
@@ -76,7 +98,7 @@ def from_tagger(pred: dict[str, Any], cfg) -> dict[str, Any]:
     """Build the prompt from a tagger prediction."""
     ordered: list[str] = []
     for t, _ in list(pred.get("character", [])) + list(pred.get("general", [])):
-        if t and t not in ordered:
+        if t and t not in ordered and not is_unwanted(t):
             ordered.append(t)
     return {
         "positive": build_positive(ordered, cfg),

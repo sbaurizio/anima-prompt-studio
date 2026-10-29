@@ -74,7 +74,118 @@ class BooruResult:
 
 
 def _t(tag_string: str | None) -> list[str]:
-    return [x for x in (tag_string or "").split(" ") if x]
+    return [x for x in str(tag_string or "").split(" ") if x]
+
+
+class BlockedError(RuntimeError):
+    """Cloudflare answered with its anti-bot check instead of the data."""
+
+
+def result_from_json(data: dict, host: str = "danbooru.donmai.us") -> BooruResult:
+    """A post as returned by the API (or copied from the browser) -> BooruResult."""
+    res = BooruResult("danbooru")
+    res.post_id = str(data.get("id", ""))
+    res.post_url = f"https://{host}/posts/{res.post_id}"
+    res.rating = str(data.get("rating") or "")
+    res.artist = _t(data.get("tag_string_artist"))
+    res.copyright = _t(data.get("tag_string_copyright"))
+    res.character = _t(data.get("tag_string_character"))
+    res.general = _t(data.get("tag_string_general"))
+    res.meta = _t(data.get("tag_string_meta"))
+    # the resized "sample" is enough for a preview; videos/animations only
+    # have a still image in preview_file_url
+    if str(data.get("file_ext") or "").lower() in ("jpg", "jpeg", "png", "webp", "gif"):
+        res.preview_url = str(data.get("large_file_url") or data.get("file_url") or "")
+    if not res.preview_url:
+        res.preview_url = str(data.get("preview_file_url") or "")
+    res.raw = data
+    return res
+
+
+def parse_pasted(text: str) -> BooruResult:
+    """Post data the user copied from the browser (the post's .json page).
+
+    The text is only read as JSON data, never run. A list (posts.json) is
+    accepted too: its first post is used.
+    """
+    import json
+
+    s = (text or "").strip()
+    if not s.startswith(("{", "[")) and "tag_string_general" not in s:
+        # the normal post page (Ctrl+A, Ctrl+C): read the tag list in the sidebar
+        return parse_page_text(s)
+    # browsers sometimes add text around the JSON when copying the whole page
+    start = min([i for i in (s.find("{"), s.find("[")) if i >= 0], default=-1)
+    if start < 0:
+        raise ValueError("no post data found: copy the whole .json page of the post")
+    try:
+        data, _ = json.JSONDecoder().raw_decode(s[start:])
+    except ValueError as exc:
+        raise ValueError("the pasted text is not complete post data: "
+                         "open the .json page again and copy everything (Ctrl+A, Ctrl+C)") from exc
+    if isinstance(data, list):
+        data = data[0] if data else {}
+    if not isinstance(data, dict) or "tag_string_general" not in data:
+        raise ValueError("this is not a Danbooru post: open https://danbooru.donmai.us/posts/<id>.json")
+    return result_from_json(data)
+
+
+# headings of the tag list in the sidebar of a post page
+_SECTIONS = {
+    "artist": "artist", "artists": "artist",
+    "copyright": "copyright", "copyrights": "copyright",
+    "character": "character", "characters": "character",
+    "general": "general", "meta": "meta",
+}
+# what comes after the tag list: stop reading there
+_STOP = {"information", "options", "history", "pools", "favorites", "related posts",
+         "artist's commentary", "comments", "recommended", "similar"}
+# "? long hair 1.2M" -> "long hair". A plain number ("? persona 5 812") is a
+# count only on a "? tag count" line: otherwise it belongs to the name
+# ("persona 5", with its count on the next line).
+_COUNT_SUFFIX = re.compile(r"\s+\d+(?:[.,]\d+)?\s*[kKmM]$")
+_COUNT_PLAIN = re.compile(r"\s+\d+(?:[.,]\d+)?$")
+
+
+def parse_page_text(text: str) -> BooruResult:
+    """The text of a normal post page copied from the browser -> BooruResult."""
+    groups: dict[str, list[str]] = {k: [] for k in set(_SECTIONS.values())}
+    current = None
+    post_id = rating = ""
+    for raw in text.splitlines():
+        line = raw.strip()
+        low = line.lower()
+        if low in _SECTIONS:
+            current = _SECTIONS[low]
+            continue
+        if low in _STOP:
+            current = None
+        m = re.match(r"^id:\s*(\d+)", low)
+        if m:
+            post_id = m.group(1)
+        m = re.match(r"^rating:\s*(\w+)", low)
+        if m:
+            rating = m.group(1)
+        if current is None or not line:
+            continue
+        tag = _COUNT_SUFFIX.sub("", line.lstrip("?").strip()).strip()
+        if line.startswith("?") and tag == line.lstrip("?").strip():
+            tag = _COUNT_PLAIN.sub("", tag).strip()
+        if not tag or tag == "?" or re.fullmatch(r"\d+(?:[.,]\d+)?\s*[kKmM]?", tag):
+            continue  # a count on its own line
+        tag = tag.replace(" ", "_")
+        if tag not in groups[current]:
+            groups[current].append(tag)
+    if not groups["general"]:
+        raise ValueError("no tags found: open the post page (or its .json page) in your "
+                         "browser, press Ctrl+A, Ctrl+C and paste everything here")
+    res = BooruResult("danbooru")
+    res.post_id = post_id
+    res.post_url = f"https://danbooru.donmai.us/posts/{post_id}" if post_id else ""
+    res.rating = rating
+    for key, tags in groups.items():
+        setattr(res, key, tags)
+    return res
 
 
 class BooruClient:
@@ -92,6 +203,19 @@ class BooruClient:
                 auth=self.auth,
                 timeout=30,
             )
+        except Exception as exc:
+            raise RuntimeError(f"request failed: {exc}") from exc
+        if r.headers.get("cf-mitigated") == "challenge":
+            # Cloudflare's anti-bot page: only a real browser can pass it
+            raise BlockedError(
+                "Danbooru's protection (Cloudflare) is blocking requests from your internet "
+                "connection right now. Try again later or from another network (e.g. restart "
+                "the router to get a new IP), or save the picture and use Tag image.")
+        if r.status_code in (401, 403):
+            hint = ("check the username and API key in Settings → Danbooru" if self.auth else
+                    "the post may be restricted: an account (Settings → Danbooru) may be needed")
+            raise RuntimeError(f"Danbooru answered {r.status_code} ({r.reason}): {hint}")
+        try:
             r.raise_for_status()
             data = r.json()
         except Exception as exc:
@@ -100,24 +224,7 @@ class BooruClient:
             data = data[0] if data else {}
         if not data:
             raise RuntimeError(f"post #{post_id} not found on {host}")
-
-        res = BooruResult("danbooru")
-        res.post_id = str(data.get("id", ""))
-        res.post_url = f"https://{host}/posts/{res.post_id}"
-        res.rating = data.get("rating") or ""
-        res.artist = _t(data.get("tag_string_artist"))
-        res.copyright = _t(data.get("tag_string_copyright"))
-        res.character = _t(data.get("tag_string_character"))
-        res.general = _t(data.get("tag_string_general"))
-        res.meta = _t(data.get("tag_string_meta"))
-        # the resized "sample" is enough for a preview; videos/animations only
-        # have a still image in preview_file_url
-        if str(data.get("file_ext") or "").lower() in ("jpg", "jpeg", "png", "webp", "gif"):
-            res.preview_url = data.get("large_file_url") or data.get("file_url") or ""
-        if not res.preview_url:
-            res.preview_url = data.get("preview_file_url") or ""
-        res.raw = data
-        return res
+        return result_from_json(data, host)
 
     def fetch_image(self, url: str):
         """Download a post image (for the preview) and return it as a PIL image."""
@@ -125,6 +232,11 @@ class BooruClient:
 
         from PIL import Image
 
+        # the URL comes from the API answer: only Danbooru's own servers are contacted
+        u = urlparse(url or "")
+        host = (u.hostname or "").lower()
+        if u.scheme != "https" or not (host == "donmai.us" or host.endswith(".donmai.us")):
+            raise RuntimeError(f"preview not on Danbooru's servers: {host or url!r}")
         r = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=30)
         r.raise_for_status()
         img = Image.open(BytesIO(r.content))

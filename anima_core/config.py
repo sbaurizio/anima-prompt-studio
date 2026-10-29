@@ -65,6 +65,11 @@ DEFAULTS: dict[str, Any] = {
         "danbooru_login": "",
         "danbooru_api_key": "",
     },
+    "tag_browser": {
+        # folder with noob-wiki/*.csv, thumbnails and tags.sqlite;
+        # empty = data/ inside the extension
+        "data_dir": "",
+    },
     "privacy": {
         # delete Gradio/Forge temporary image copies when the WebUI starts
         "clean_temp_on_start": False,
@@ -76,6 +81,8 @@ DEFAULTS: dict[str, Any] = {
         "escape_parens": True,
         "max_tags": 80,
         "dedupe": True,
+        # artist tags of Danbooru posts (style); off = left out
+        "keep_artist": False,
     },
 }
 

@@ -4,7 +4,8 @@ An always-visible panel in txt2img and img2img:
 
     image -> WD tagger (local)  ┐
     Danbooru post URL -> API   ├-> tags -> (optional LLM) -> prompt -> Forge
-    idea -> LLM                ┘
+    idea -> LLM                │
+    character/artist -> local DB ┘
 
 Safety rules:
   * the WebUI virtual environment is never touched: onnxruntime-directml lives
@@ -40,6 +41,7 @@ BOORU = None
 LLM = None
 ENGINE = None
 SERVER = None
+BROWSER = None
 
 _TAGGER_LOCK = threading.Lock()
 
@@ -69,7 +71,10 @@ try:
     _spec.loader.exec_module(_mod)
 
     from anima_core import prompt_builder as pb                     # noqa: E402
-    from anima_core.booru import BooruClient, parse_post_id         # noqa: E402
+    from anima_core.booru import (BlockedError, BooruClient,         # noqa: E402
+                                  parse_pasted, parse_post_id)
+    from anima_core import tag_browser as tb                        # noqa: E402
+    from anima_core.character_tags import character_tags            # noqa: E402
     from anima_core.config import DEFAULTS, MODELS_DIR, Config      # noqa: E402
     from anima_core.llm import LLMClient                            # noqa: E402
     from anima_core.prompts import PromptEngine                     # noqa: E402
@@ -92,10 +97,11 @@ from modules import script_callbacks, scripts              # noqa: E402
 
 def _rebuild_clients() -> None:
     """(Re)create the clients after settings change."""
-    global BOORU, LLM, ENGINE
+    global BOORU, LLM, ENGINE, BROWSER
     BOORU = BooruClient(CFG)
     LLM = LLMClient(CFG)
     ENGINE = PromptEngine(LLM, CFG)
+    BROWSER = tb.TagBrowser(CFG)
 
 
 if AVAILABLE:
@@ -256,6 +262,17 @@ _CSS = """
 #anima_img_txt2img video, #anima_img_img2img video { object-fit: contain; }
 """
 
+# Gradio 4's table draws only the rows in view: if it is scrolled down when
+# new, shorter results arrive, it shows nothing. Scroll it back to the top
+# (only the table of the tab being searched; TAB is replaced per tab).
+_JS_TABLE_TOP = """
+(...args) => {
+    const root = document.querySelector('#anima_br_TAB');
+    if (root) root.querySelectorAll('*').forEach(el => { if (el.scrollTop) el.scrollTop = 0; });
+    return args;
+}
+"""
+
 
 def _grab_component(component=None, **kwargs):
     """Keep a reference to Forge's prompt fields so we can write into them."""
@@ -321,10 +338,40 @@ def _split_tags(text: str) -> list[str]:
     return [t.strip() for t in (text or "").split(",") if t.strip()]
 
 
-def do_tag_image(img, gen_thr, char_thr):
-    """Image -> tags with the local tagger. Returns tags, positive, negative, status."""
+# The tag list is built from two parts, kept per tab in a gr.State:
+#   base  - tags from the image, the Danbooru post or the idea (with categories)
+#   added - tags added from the character/artist browser, one entry per type
+# Tagging a new image replaces `base` but keeps what was added from the browser.
+
+def _new_meta() -> dict:
+    return {"base": [], "cats": {}, "added": {tb.CHARACTERS: [], tb.ARTISTS: []}}
+
+
+def _choices(meta: dict) -> list[str]:
+    added = meta["added"]
+    return list(dict.fromkeys(added[tb.CHARACTERS] + added[tb.ARTISTS] + meta["base"]))
+
+
+def _tags_out(meta: dict, checked) -> tuple:
+    """CheckboxGroup update + positive prompt for the given checked tags."""
+    choices = _choices(meta)
+    checked = set(checked or [])
+    value = [t for t in choices if t in checked]
+    return gr.update(choices=choices, value=value), do_rebuild(value)
+
+
+def _set_base(meta, tags: list[str], cats: dict[str, str]) -> tuple:
+    """New tags from the image/post/idea; browser tags stay. Returns (tags update, positive, meta)."""
+    meta = dict(meta or _new_meta())
+    meta.update(base=list(tags), cats=dict(cats))
+    update, positive = _tags_out(meta, _choices(meta))
+    return update, positive, meta
+
+
+def do_tag_image(img, gen_thr, char_thr, meta):
+    """Image -> tags with the local tagger. Returns tags, positive, negative, status, meta."""
     if img is None:
-        return gr.update(), "", "", "⚠️ load an image first"
+        return gr.update(), gr.update(), gr.update(), "⚠️ load an image first", meta
     # keep the picture in memory and delete the temporary copy on disk
     src = img.info.get("anima_source") if hasattr(img, "info") else None
     if src:
@@ -336,7 +383,7 @@ def do_tag_image(img, gen_thr, char_thr):
         if svc.error:
             err = svc.error
             reset_tagger()  # allow a retry after fixing settings / downloading
-            return gr.update(), "", "", f"❌ tagger: {err}"
+            return gr.update(), gr.update(), gr.update(), f"❌ tagger: {err}", meta
         pred = svc.predict(
             img,
             general_threshold=float(gen_thr),
@@ -345,49 +392,86 @@ def do_tag_image(img, gen_thr, char_thr):
         )
         data = pb.from_tagger(pred, CFG)
         tags = data["tags"]
+        cats = {t: "character" for t, _ in pred.get("character", [])}
+        update, positive, meta = _set_base(meta, tags, cats)
         return (
-            gr.update(choices=tags, value=tags),
-            data["positive"],
+            update,
+            positive,
             data["negative"],
             f"✅ **{len(tags)} tags** · {pred.get('provider', '')} · "
             f"rating: **{data['rating_label']}**",
+            meta,
         )
     except Exception as exc:
         _log(f"tag_image: {exc}\n{traceback.format_exc(limit=3)}")
-        return gr.update(), "", "", f"❌ {type(exc).__name__}: {exc}"
+        return gr.update(), gr.update(), gr.update(), f"❌ {type(exc).__name__}: {exc}", meta
 
 
-def do_analyze_url(url):
+def do_analyze_url(url, meta):
     """Danbooru URL -> exact tags from the API (no model involved) + preview.
 
-    Returns tags, positive, negative, status, image.
+    Returns tags, positive, negative, status, meta, image.
     """
     url = (url or "").strip()
     if not url:
-        return gr.update(), "", "", "⚠️ paste a URL", gr.update()
+        return gr.update(), gr.update(), gr.update(), "⚠️ paste a URL", meta, gr.update()
     try:
         parsed = parse_post_id(url)
         if not parsed:
-            return gr.update(), "", "", "⚠️ not a valid Danbooru post link", gr.update()
+            return gr.update(), gr.update(), gr.update(), "⚠️ not a valid Danbooru post link", meta, gr.update()
         host, post_id = parsed
-        res = BOORU.by_post_id(post_id, host)
-        data = pb.from_booru(res, CFG)
-        tags = list(data["tags"])
-        status = (f"✅ **post #{res.post_id}** · {len(tags)} tags · "
-                  f"rating: **{data['rating_label']}**")
-        image = gr.update()
-        if res.preview_url:
-            try:
-                image = BOORU.fetch_image(res.preview_url)
-            except Exception as exc:
-                _log(f"preview: {exc}")
-                status += " · preview not available"
-        else:
-            status += " · no preview (restricted post)"
-        return gr.update(choices=tags, value=tags), data["positive"], data["negative"], status, image
+        try:
+            res = BOORU.by_post_id(post_id, host)
+        except BlockedError as exc:
+            # only a real browser passes Cloudflare's check: let it fetch the data
+            link = f"https://{host}/posts/{post_id}.json"
+            return (gr.update(), gr.update(), gr.update(),
+                    f"⚠️ {exc}\n\n**Workaround:** open the post (or [{link}]({link})) in your browser, "
+                    "press **Ctrl+A** then **Ctrl+C**, paste into *Paste Danbooru post data* "
+                    "below and press **Read pasted data**.",
+                    meta, gr.update())
+        return _apply_booru(res, meta)
     except Exception as exc:
         _log(f"analyze_url: {exc}")
-        return gr.update(), "", "", f"❌ {type(exc).__name__}: {exc}", gr.update()
+        return gr.update(), gr.update(), gr.update(), f"❌ {type(exc).__name__}: {exc}", meta, gr.update()
+
+
+def do_paste_booru(text, meta):
+    """Post data copied from the browser (the post's .json page) -> tags + preview."""
+    if not (text or "").strip():
+        return gr.update(), gr.update(), gr.update(), "⚠️ paste the post data first", meta, gr.update()
+    try:
+        return _apply_booru(parse_pasted(text), meta)
+    except Exception as exc:
+        _log(f"paste_booru: {exc}")
+        return gr.update(), gr.update(), gr.update(), f"❌ {exc}", meta, gr.update()
+
+
+def _apply_booru(res, meta):
+    """BooruResult -> tags, positive, negative, status, meta, image."""
+    data = pb.from_booru(res, CFG)
+    tags = list(data["tags"])
+    # same spelling as from_booru uses for the tag list
+    cats = {t.replace("_", " "): cat
+            for cat, group in (("character", res.character), ("copyright", res.copyright),
+                               ("artist", res.artist))
+            for t in group}
+    update, positive, meta = _set_base(meta, tags, cats)
+    status = (f"✅ **post #{res.post_id}** · {len(tags)} tags · "
+              f"rating: **{data['rating_label']}**")
+    image = gr.update()
+    if res.preview_url:
+        try:
+            image = BOORU.fetch_image(res.preview_url)
+        except Exception as exc:
+            _log(f"preview: {exc}")
+            status += " · preview not available (you can drop the saved image above)"
+    elif res.raw:
+        status += " · no preview (restricted post)"
+    else:
+        # read from the page text, which has no image address
+        status += " · no preview from page text (you can drop the saved image above)"
+    return update, positive, data["negative"], status, meta, image
 
 
 def do_rebuild(selected):
@@ -419,20 +503,22 @@ def do_refine(selected, current_pos, natural_language):
         yield current_pos, f"❌ {type(exc).__name__}: {exc}"
 
 
-def do_idea(idea):
+def do_idea(idea, meta):
     """Idea (any language) -> full tag set."""
     if not (idea or "").strip():
-        yield gr.update(), "", "⚠️ write an idea first"
+        yield gr.update(), gr.update(), "⚠️ write an idea first", meta
         return
     try:
         for msg in _ensure_llm():
-            yield gr.update(), "", msg
+            yield gr.update(), gr.update(), msg, meta
         out = ENGINE.idea_to_tags(idea)
-        tags = _split_tags(out)
-        yield gr.update(choices=tags, value=tags), out, f"✅ idea expanded into {len(tags)} tags"
+        tags = [t for t in _split_tags(out) if not pb.is_unwanted(t)]
+        # the prompt is rebuilt from the filtered tags, never the raw answer
+        update, positive, meta = _set_base(meta, tags, {})
+        yield update, positive, f"✅ idea expanded into {len(tags)} tags", meta
     except Exception as exc:
         _log(f"idea: {exc}")
-        yield gr.update(), "", f"❌ {type(exc).__name__}: {exc}"
+        yield gr.update(), gr.update(), f"❌ {type(exc).__name__}: {exc}", meta
 
 
 def do_save_defaults(default_pos, default_neg, selected, current_pos):
@@ -446,6 +532,120 @@ def do_save_defaults(default_pos, default_neg, selected, current_pos):
     except Exception as exc:
         _log(f"save_defaults: {exc}")
         return current_pos, default_neg, f"❌ {type(exc).__name__}: {exc}"
+
+
+# ------------------------------------------------ character / artist browser
+
+def _copy_meta(meta) -> dict:
+    meta = meta or _new_meta()
+    return {"base": list(meta["base"]), "cats": dict(meta["cats"]),
+            "added": {k: list(v) for k, v in meta["added"].items()}}
+
+
+def _strip_characters(meta: dict, checked: list[str]) -> list[str]:
+    """Checked tags that describe the image's character (browser tags excluded)."""
+    keep = meta["added"][tb.CHARACTERS] + meta["added"][tb.ARTISTS]
+    # one query for all the recognized characters
+    rows = BROWSER.lookup_characters(t for t in checked if meta["cats"].get(t) == "character")
+    return character_tags(checked, meta["cats"], rows.get, keep=keep)
+
+
+def do_browse(mode, query, series, min_count, page):
+    """Search the local database. Returns table rows, rows (state), status, selection."""
+    try:
+        rows = BROWSER.search(mode, query, series, min_count, page)
+    except Exception as exc:
+        _log(f"browse: {exc}")
+        return [], [], f"❌ {type(exc).__name__}: {exc}", None
+    if mode == tb.CHARACTERS:
+        table = [[r["trigger"], r["count"], r["core_tags"]] for r in rows]
+    else:
+        table = [["@" + r["trigger"], r["count"], ""] for r in rows]
+    status = f"{len(rows)} results (page {int(page or 1)})" if rows else "No results."
+    return table, rows, status, None
+
+
+def do_browse_click(mode, rows, with_tags, evt: gr.SelectData):
+    """Row clicked: preview, info line, tags to add, selected row."""
+    return (*do_browse_select(mode, rows, with_tags, evt.index[0]), evt.index[0])
+
+
+def do_browse_select(mode, rows, with_tags, index):
+    """Preview, info line and tags to add for the selected row."""
+    if index is None or not rows or int(index) >= len(rows):
+        return gr.update(), gr.update(), gr.update()
+    row = rows[int(index)]
+    info = (f"**{row['trigger']}** · {row['count']:,} posts"
+            + (f" · series `{row['copyright']}`" if mode == tb.CHARACTERS else ""))
+    image = None
+    path = BROWSER.thumb(mode, row["trigger"])
+    if path:
+        try:
+            from PIL import Image
+            with Image.open(path) as im:
+                image = im.copy()  # in memory: the file in data/ stays untouched
+        except Exception as exc:
+            _log(f"thumbnail: {exc}")
+    return image, info, ", ".join(tb.entry_tags(mode, row, with_tags))
+
+
+def do_browse_add(mode, text, checked, meta, replace, strip):
+    """Add a character/artist to the tag list. Returns tags, positive, meta, status."""
+    tags = split_tags(text)
+    if not tags:
+        return gr.update(), gr.update(), meta, "⚠️ click a row in the results first"
+    meta = _copy_meta(meta)
+    checked = list(checked or [])
+    dropped: list[str] = []
+    if replace:
+        old = [t for t in meta["added"][mode] if t not in meta["base"]]
+        checked = [t for t in checked if t not in old]
+        meta["added"][mode] = []
+    if strip and mode == tb.CHARACTERS:
+        dropped = _strip_characters(meta, checked)
+        checked = [t for t in checked if t not in dropped]
+    meta["added"][mode] = list(dict.fromkeys(meta["added"][mode] + tags))
+    update, positive = _tags_out(meta, checked + tags)
+    status = f"✅ added {len(tags)} tag(s)"
+    if dropped:
+        status += f" · unchecked {len(dropped)} tag(s) of the image's character"
+    return update, positive, meta, status
+
+
+def do_browse_remove(mode, checked, meta):
+    """Remove the character (or artist) added from the browser."""
+    meta = _copy_meta(meta)
+    old = [t for t in meta["added"][mode] if t not in meta["base"]]
+    if not meta["added"][mode]:
+        return gr.update(), gr.update(), meta, f"nothing added from {mode.lower()}"
+    meta["added"][mode] = []
+    update, positive = _tags_out(meta, [t for t in (checked or []) if t not in old])
+    return update, positive, meta, f"✅ removed the {mode[:-1].lower()} added from the browser"
+
+
+def do_strip_character(checked, meta):
+    """Uncheck the image's character tags (name, series, hair, eyes…)."""
+    meta = meta or _new_meta()
+    checked = list(checked or [])
+    dropped = _strip_characters(meta, checked)
+    if not dropped:
+        return gr.update(), gr.update(), "no character tags found among the checked tags"
+    update, positive = _tags_out(meta, [t for t in checked if t not in dropped])
+    shown = ", ".join(dropped[:12]) + (" …" if len(dropped) > 12 else "")
+    return update, positive, f"✅ unchecked {len(dropped)} character tag(s): {shown}"
+
+
+def do_download_data(data_dir):
+    # the folder in the field, even if not saved yet
+    browser = tb.TagBrowser(_TempCfg({("tag_browser", "data_dir"): data_dir or ""}))
+    try:
+        for line in tb.download_data(browser.data_dir):
+            yield f"⏳ {line}"
+        yield "⏳ building the database…"
+        yield browser.build_db() + " Press **Save settings** if you changed the folder."
+    except Exception as exc:
+        _log(f"download_data: {exc}")
+        yield f"❌ {type(exc).__name__}: {exc}"
 
 
 # ------------------------------------------------------------ server buttons
@@ -505,7 +705,8 @@ SETTINGS_FIELDS = [
     ("tagger", "general_threshold"), ("tagger", "character_threshold"),
     ("booru", "danbooru_login"), ("booru", "danbooru_api_key"),
     ("output", "underscores"), ("output", "escape_parens"),
-    ("output", "max_tags"), ("output", "dedupe"),
+    ("output", "max_tags"), ("output", "dedupe"), ("output", "keep_artist"),
+    ("tag_browser", "data_dir"),
     ("privacy", "clean_temp_on_start"),
 ]
 
@@ -620,8 +821,8 @@ class AnimaPromptStudio(scripts.Script):
                 return []
 
             gr.Markdown(
-                "Image or Danbooru link → tags → prompt. The tagger runs locally; "
-                "the language model is only used by *Refine* and *Expand idea*."
+                "Image or Danbooru link → tags → prompt. The tagger and the character/artist "
+                "search run locally; the language model is only used by *Refine* and *Expand idea*."
             )
 
             # --- row 1: image on the left, URL + status on the right -------
@@ -643,6 +844,14 @@ class AnimaPromptStudio(scripts.Script):
                         btn_tag = gr.Button("Tag image", variant="primary")
                         btn_url = gr.Button("Analyze URL")
                     status_md = gr.Markdown("ready")
+                    with gr.Accordion("Paste Danbooru post data (when Analyze URL is blocked)",
+                                      open=False):
+                        paste_in = gr.Textbox(
+                            label="Open the post in your browser (normal page or its .json "
+                                  "page), press Ctrl+A, Ctrl+C and paste everything here",
+                            lines=3, max_lines=6,
+                        )
+                        btn_paste = gr.Button("Read pasted data")
 
             # --- row 2: tags, full width ------------------------------------
             tag_box = gr.CheckboxGroup(
@@ -650,6 +859,7 @@ class AnimaPromptStudio(scripts.Script):
                 choices=[], value=[],
                 elem_id=f"anima_tags_{tab}",
             )
+            tags_meta = gr.State(_new_meta())
 
             # --- row 3: refinement -------------------------------------------
             with gr.Row():
@@ -657,6 +867,54 @@ class AnimaPromptStudio(scripts.Script):
                                        scale=2, min_width=220)
                 nl_check = gr.Checkbox(label="as natural language", value=False,
                                        scale=1, min_width=200)
+                btn_strip = gr.Button("Remove character tags", scale=1, min_width=200)
+
+            # --- characters & artists from the local database ---------------
+            with gr.Accordion("Characters & artists (offline)", open=False):
+                gr.Markdown(
+                    "Search Danbooru characters and artists in the local database (no "
+                    "internet), click a row, then *Add to tags*. The tags go into the list "
+                    "above and into the Positive prompt."
+                )
+                with gr.Row():
+                    br_mode = gr.Radio([tb.CHARACTERS, tb.ARTISTS], value=tb.CHARACTERS,
+                                       label="Type", scale=1, min_width=200)
+                    br_query = gr.Textbox(label="Search (name or tags, comma = AND)",
+                                          placeholder="e.g. frieren   or   blue hair, twintails",
+                                          scale=3)
+                    br_series = gr.Textbox(label="Series", placeholder="e.g. genshin impact",
+                                           scale=2)
+                with gr.Row():
+                    br_min = gr.Slider(0, 5000, value=50, step=10,
+                                       label="Minimum posts on Danbooru", scale=3)
+                    br_page = gr.Number(value=1, precision=0, minimum=1, label="Page",
+                                        scale=1, min_width=100)
+                    btn_br_search = gr.Button("Search", variant="primary", scale=1)
+                br_status = gr.Markdown("")
+                br_results = gr.Dataframe(headers=["Name", "Posts", "Tags"],
+                                          datatype=["str", "number", "str"],
+                                          interactive=False, wrap=True, height=320,
+                                          elem_id=f"anima_br_{tab}")
+                br_sel = gr.State(None)
+                br_rows = gr.State([])
+                with gr.Row():
+                    br_thumb = gr.Image(label="Preview", type="pil", interactive=False,
+                                        height=200, scale=1, min_width=160)
+                    with gr.Column(scale=3):
+                        br_info = gr.Markdown("")
+                        br_with_tags = gr.Checkbox(value=True,
+                                                   label="Include appearance tags (characters)")
+                        br_text = gr.Textbox(label="Tags to add (editable)", lines=2)
+                        with gr.Row():
+                            br_replace = gr.Checkbox(
+                                value=True, label="Replace the previous character/artist")
+                            br_strip = gr.Checkbox(
+                                value=True,
+                                label="Remove the image's character tags when adding a character")
+                        with gr.Row():
+                            btn_br_add = gr.Button("Add to tags", variant="primary")
+                            btn_br_remove = gr.Button("Remove from tags", variant="stop")
+                            btn_br_rebuild = gr.Button("Rebuild database from CSV")
 
             with gr.Row():
                 pos_box = gr.Textbox(
@@ -726,14 +984,39 @@ class AnimaPromptStudio(scripts.Script):
                 gr.Markdown("*Settings are in the txt2img tab.*")
 
             # ------------------------------------------------------- events
-            tag_outputs = [tag_box, pos_box, neg_box, status_md]
+            tag_outputs = [tag_box, pos_box, neg_box, status_md, tags_meta]
 
-            btn_tag.click(do_tag_image, inputs=[img_in, gen_sl, char_sl], outputs=tag_outputs)
-            btn_url.click(do_analyze_url, inputs=[url_in], outputs=tag_outputs + [img_in])
+            btn_tag.click(do_tag_image, inputs=[img_in, gen_sl, char_sl, tags_meta],
+                          outputs=tag_outputs)
+            btn_url.click(do_analyze_url, inputs=[url_in, tags_meta], outputs=tag_outputs + [img_in])
+            btn_paste.click(do_paste_booru, inputs=[paste_in, tags_meta],
+                            outputs=tag_outputs + [img_in])
             tag_box.change(do_rebuild, inputs=[tag_box], outputs=[pos_box])
             btn_refine.click(do_refine, inputs=[tag_box, pos_box, nl_check],
                              outputs=[pos_box, status_md])
-            btn_idea.click(do_idea, inputs=[idea_in], outputs=[tag_box, pos_box, status_md])
+            btn_strip.click(do_strip_character, inputs=[tag_box, tags_meta],
+                            outputs=[tag_box, pos_box, status_md])
+            btn_idea.click(do_idea, inputs=[idea_in, tags_meta],
+                           outputs=[tag_box, pos_box, status_md, tags_meta])
+
+            br_inputs = [br_mode, br_query, br_series, br_min, br_page]
+            js_top = _JS_TABLE_TOP.replace("TAB", tab)
+            br_outputs = [br_results, br_rows, br_status, br_sel]
+            btn_br_search.click(do_browse, br_inputs, br_outputs, js=js_top)
+            br_query.submit(do_browse, br_inputs, br_outputs, js=js_top)
+            br_series.submit(do_browse, br_inputs, br_outputs, js=js_top)
+            br_mode.change(lambda: 1, None, br_page).then(do_browse, br_inputs, br_outputs,
+                                                          js=js_top)
+            br_results.select(do_browse_click, [br_mode, br_rows, br_with_tags],
+                              [br_thumb, br_info, br_text, br_sel])
+            br_with_tags.change(do_browse_select, [br_mode, br_rows, br_with_tags, br_sel],
+                                [br_thumb, br_info, br_text])
+            btn_br_add.click(do_browse_add,
+                             [br_mode, br_text, tag_box, tags_meta, br_replace, br_strip],
+                             [tag_box, pos_box, tags_meta, br_status])
+            btn_br_remove.click(do_browse_remove, [br_mode, tag_box, tags_meta],
+                                [tag_box, pos_box, tags_meta, br_status])
+            btn_br_rebuild.click(lambda: BROWSER.build_db(), None, br_status)
             btn_save_defaults.click(
                 do_save_defaults,
                 inputs=[default_pos, default_neg, tag_box, pos_box],
@@ -881,6 +1164,23 @@ class AnimaPromptStudio(scripts.Script):
                     o_par = gr.Checkbox(label=r"Escape parentheses: \( \)", value=c("output", "escape_parens"))
                     o_ded = gr.Checkbox(label="Remove duplicates", value=c("output", "dedupe"))
                 o_max = gr.Number(label="Max tags (0 = no limit)", precision=0, value=c("output", "max_tags"))
+                o_art = gr.Checkbox(label="Keep artist tags from Danbooru posts", value=c("output", "keep_artist"))
+                gr.Markdown("Watermarks, signatures, artist names, Patreon/Twitter/pixiv usernames, "
+                            "web addresses, logos and censorship tags are always left out of the tags.")
+
+            with gr.Tab("Tag browser"):
+                gr.Markdown(
+                    "Data for *Characters & artists (offline)*: two CSV files from the "
+                    "Hugging Face dataset `Laxhar/noob-wiki` (~70 MB), turned into a local "
+                    "database. **Download data** is the only time this feature goes online; "
+                    "searching is always offline."
+                )
+                tb_dir = gr.Textbox(label="Data folder (empty = data/ inside the extension)",
+                                    value=c("tag_browser", "data_dir"))
+                with gr.Row():
+                    btn_tb_download = gr.Button("Download data")
+                    btn_tb_status = gr.Button("Check data")
+                tb_status = gr.Markdown(BROWSER.status())
 
             with gr.Tab("Privacy"):
                 gr.Markdown(
@@ -907,7 +1207,8 @@ class AnimaPromptStudio(scripts.Script):
             ls_enabled, ls_exe, ls_model, ls_ctx, ls_ngl, ls_extra, ls_stop,
             t_repo, t_dir, t_gpu, t_dev, t_unload, gen_sl, char_sl,
             b_login, b_key,
-            o_us, o_par, o_max, o_ded,
+            o_us, o_par, o_max, o_ded, o_art,
+            tb_dir,
             p_clean,
         ]
         assert len(fields) == len(SETTINGS_FIELDS)
@@ -916,6 +1217,9 @@ class AnimaPromptStudio(scripts.Script):
         btn_models.click(do_fetch_models, inputs=[base_url, api_key, model],
                          outputs=[model, settings_md])
         btn_download.click(do_download_tagger, inputs=[t_repo, t_dir], outputs=[settings_md])
+        btn_tb_download.click(do_download_data, inputs=[tb_dir], outputs=[tb_status])
+        btn_tb_status.click(lambda d: tb.TagBrowser(_TempCfg({("tag_browser", "data_dir"): d or ""})).status(),
+                            inputs=[tb_dir], outputs=[tb_status])
         return fields
 
     # ------------------------------------------------ before every generation

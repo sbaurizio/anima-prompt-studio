@@ -10,3 +10,6 @@ models/
 __pycache__/
 *.pyc
 *.part
+
+# offline character/artist data (CSV, thumbnails, tags.sqlite)
+data/
