@@ -42,10 +42,11 @@ plain Danbooru tags, so it works with any tag-based model.
   `@name`) at the top of the tag list. Searching never uses the internet.
 - **Swap the character** — *Remove character tags* unchecks everything that
   describes who is in the picture (name, series, hair, eyes, ears, wings…)
-  and what they wear (clothes, shoes, accessories), and keeps pose,
-  expression and background. Add another character from the search and you
-  get the same scene with a different character. Adding a character does
-  this automatically (it can be turned off).
+  and keeps clothing, pose, expression and background. Add another
+  character from the search and you get the same scene and outfit with a
+  different character. Adding a character does this automatically (it can
+  be turned off). **Remove clothing**, next to it, unchecks clothes, shoes
+  and accessories on their own.
 
 ### Clean, controllable prompts
 - **Pick the tags you want** — every tag is a checkbox; uncheck one and the
@@ -150,17 +151,18 @@ down to the extensions area and expand **Anima Prompt Studio**.
 2. Open **Characters & artists (offline)**, type a name (e.g. `frieren`) and
    press **Search**. Click a row: you see its appearance tags and, if
    available, a thumbnail.
-3. Press **Add to tags**. The original character's name, look and outfit are
-   unchecked and the new character is added at the top; pose, expression and
-   background stay. (To keep the original tags, untick *Remove the image's
-   character tags when adding a character* first.)
+3. Press **Add to tags**. The original character's name and look are
+   unchecked and the new character is added at the top; outfit, pose,
+   expression and background stay. (To keep the original tags, untick
+   *Remove the image's character tags when adding a character* first; press
+   **Remove clothing** to drop the outfit too.)
 4. Want an artist's style too? Switch *Type* to **Artists**, search, click a
    row and press **Add to tags** (it is added as `@name`).
 5. **Send positive to Forge** and generate.
 
 You can also use **Remove character tags** on its own, next to *Refine with
-LLM*, and **Remove from tags** to take back the character or artist you
-added.
+LLM*, **Remove clothing** to drop the outfit too, and **Remove from tags** to
+take back the character or artist you added.
 
 ### 5. Optional: a language model for *Refine* and *Expand idea*
 
@@ -333,14 +335,17 @@ character in the image or post, which you can check again by hand:
 - the appearance tags the database lists for that character (e.g. for
   Hatsune Miku: aqua hair, twintails, detached sleeves…);
 - body traits by pattern: hair color/length/style, eye color, skin, animal
-  ears, horns, tails, wings, halo, fangs, moles, breast size;
-- clothing and accessories, recognized by their last word: `white dress`,
-  `black pantyhose`, `brown footwear`, `dangle earrings`, `long sleeves`,
-  `hair ornament`, `glasses`…
+  ears, horns, tails, wings, halo, fangs, moles, breast size.
+
+Clothing is kept, even when the database lists it for that character.
+**Remove clothing** (next to it) unchecks clothing and accessories,
+recognized by their last word: `white dress`, `black pantyhose`,
+`brown footwear`, `dangle earrings`, `long sleeves`, `hair ornament`,
+`glasses`…
 
 People counts (`1girl`, `solo`…), pose, expression, background, objects
-(`holding sword`, `bow (weapon)`) and artist tags are kept, as are the tags
-you added from the browser.
+(`holding sword`, `bow (weapon)`) and artist tags are kept by both buttons,
+as are the tags you added from the browser.
 
 #### Data
 

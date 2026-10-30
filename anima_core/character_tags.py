@@ -1,15 +1,17 @@
-"""Find the tags that describe *who* is in the picture.
+"""Find the tags that describe *who* is in the picture, and what they wear.
 
 Used by "Remove character tags": after tagging an image or reading a Danbooru
 post, these tags are unchecked so another character, picked in the offline
-browser, can take their place with their own look and outfit. Pose,
+browser, can take their place with their own look. Clothing, pose,
 expression, background and style tags stay.
 
-Four sources, from the most to the least precise:
+Three sources, from the most to the least precise:
   1. the tag category: character / copyright (Danbooru) or character (tagger);
   2. the appearance tags of the recognized characters, from the local database;
-  3. body traits by pattern: hair, eyes, skin, ears, horns, tails, wings...;
-  4. clothing and accessories, by their last word: dress, boots, earrings...
+  3. body traits by pattern: hair, eyes, skin, ears, horns, tails, wings...
+
+"Remove clothing" uses `clothing_tags`: clothing and accessories, recognized
+by their last word (dress, boots, earrings...).
 """
 from __future__ import annotations
 
@@ -96,11 +98,12 @@ def character_tags(
     lookup: Callable[[str], dict | None] | None = None,
     keep: Iterable[str] = (),
 ) -> list[str]:
-    """Tags among `tags` that identify or describe the character(s).
+    """Tags among `tags` that identify the character(s) or their body traits.
 
     `categories` maps a tag to its category ("character", "copyright",
     "artist", "general"); `lookup` returns the database row of a character;
     tags in `keep` (e.g. the ones added from the browser) are never returned.
+    Clothing is never returned, even when the database lists it.
     """
     tags = list(tags)
     keep_keys = {key(t) for t in keep}
@@ -120,7 +123,21 @@ def character_tags(
         k = key(t)
         if k in keep_keys or _COUNT.match(k):
             continue
-        if (categories.get(t) in IDENTITY_CATEGORIES or k in from_db
-                or _TRAIT.match(k) or is_clothing(k)):
+        if categories.get(t) in IDENTITY_CATEGORIES:
+            out.append(t)
+        elif (k in from_db or _TRAIT.match(k)) and not is_clothing(k):
             out.append(t)
     return out
+
+
+def clothing_tags(
+    tags: Iterable[str],
+    categories: dict[str, str],
+    keep: Iterable[str] = (),
+) -> list[str]:
+    """Tags among `tags` that are clothing or accessories (`keep` excluded)."""
+    keep_keys = {key(t) for t in keep}
+    return [t for t in tags
+            if key(t) not in keep_keys
+            and categories.get(t) not in IDENTITY_CATEGORIES | {"artist"}
+            and is_clothing(t)]

@@ -74,7 +74,7 @@ try:
     from anima_core.booru import (BlockedError, BooruClient,         # noqa: E402
                                   parse_pasted, parse_post_id)
     from anima_core import tag_browser as tb                        # noqa: E402
-    from anima_core.character_tags import character_tags            # noqa: E402
+    from anima_core.character_tags import character_tags, clothing_tags  # noqa: E402
     from anima_core.config import DEFAULTS, MODELS_DIR, Config      # noqa: E402
     from anima_core.llm import LLMClient                            # noqa: E402
     from anima_core.prompts import PromptEngine                     # noqa: E402
@@ -634,16 +634,28 @@ def do_browse_remove(mode, checked, meta):
     return update, positive, meta, f"✅ removed the {mode[:-1].lower()} added from the browser"
 
 
+def _uncheck(meta, checked: list[str], dropped: list[str], what: str):
+    """Tags, positive and status after unchecking `dropped`."""
+    if not dropped:
+        return gr.update(), gr.update(), f"no {what} tags found among the checked tags"
+    update, positive = _tags_out(meta, [t for t in checked if t not in dropped])
+    shown = ", ".join(dropped[:12]) + (" …" if len(dropped) > 12 else "")
+    return update, positive, f"✅ unchecked {len(dropped)} {what} tag(s): {shown}"
+
+
 def do_strip_character(checked, meta):
     """Uncheck the image's character tags (name, series, hair, eyes…)."""
     meta = meta or _new_meta()
     checked = list(checked or [])
-    dropped = _strip_characters(meta, checked)
-    if not dropped:
-        return gr.update(), gr.update(), "no character tags found among the checked tags"
-    update, positive = _tags_out(meta, [t for t in checked if t not in dropped])
-    shown = ", ".join(dropped[:12]) + (" …" if len(dropped) > 12 else "")
-    return update, positive, f"✅ unchecked {len(dropped)} character tag(s): {shown}"
+    return _uncheck(meta, checked, _strip_characters(meta, checked), "character")
+
+
+def do_strip_clothing(checked, meta):
+    """Uncheck the clothing and accessories (browser tags excluded)."""
+    meta = meta or _new_meta()
+    checked = list(checked or [])
+    keep = meta["added"][tb.CHARACTERS] + meta["added"][tb.ARTISTS]
+    return _uncheck(meta, checked, clothing_tags(checked, meta["cats"], keep=keep), "clothing")
 
 
 def do_download_data(data_dir):
@@ -879,6 +891,7 @@ class AnimaPromptStudio(scripts.Script):
                 nl_check = gr.Checkbox(label="as natural language", value=False,
                                        scale=1, min_width=200)
                 btn_strip = gr.Button("Remove character tags", scale=1, min_width=200)
+                btn_strip_clothes = gr.Button("Remove clothing", scale=1, min_width=160)
 
             # --- characters & artists from the local database ---------------
             with gr.Accordion("Characters & artists (offline)", open=False):
@@ -1007,6 +1020,8 @@ class AnimaPromptStudio(scripts.Script):
                              outputs=[pos_box, status_md])
             btn_strip.click(do_strip_character, inputs=[tag_box, tags_meta],
                             outputs=[tag_box, pos_box, status_md])
+            btn_strip_clothes.click(do_strip_clothing, inputs=[tag_box, tags_meta],
+                                    outputs=[tag_box, pos_box, status_md])
             btn_idea.click(do_idea, inputs=[idea_in, tags_meta],
                            outputs=[tag_box, pos_box, status_md, tags_meta])
 
