@@ -1,15 +1,15 @@
 # Anima Prompt Studio
 
-An extension for **Stable Diffusion WebUI Forge (Neo)** that turns an image or a
-Danbooru post into a ready-to-use prompt, lets you add any Danbooru character
-or artist from an offline database, and sends the result to the positive or
-negative prompt field with one click.
+An extension for **Stable Diffusion WebUI Forge (Neo)** that builds clean,
+ready-to-use prompts for anime models. Start from a picture, a Danbooru
+post, an idea in your own language, or any Danbooru character or artist; pick the tags you want; send the result to Forge with one click.
 
 ```
-image             ->  WD tagger (runs locally)  ┐
-Danbooru post URL ->  Danbooru API              │
-an idea           ->  your language model       ├─> tags ─> (optional LLM) ─> prompt ─> Forge
-character/artist  ->  local database (offline)  ┘
+an image          ->  WD tagger (runs locally)       ┐
+a Danbooru link   ->  Danbooru API                   │
+an idea           ->  your language model            ├─> tag list ─> prompt ─> Forge
+character/artist  ->  local database (offline)       ┘      ▲
+                        filters, swap the character, LLM ───┘
 ```
 
 Made for anime models such as Anima, Illustrious and NoobAI, but the output is
@@ -17,39 +17,63 @@ plain Danbooru tags, so it works with any tag-based model.
 
 ![Anima Prompt Studio in the txt2img tab: an image tagged locally, the tag list and the generated prompt](docs/screenshot.png)
 
-## Features
+## What it does
 
-- **Tag an image** with a WD v3 tagger (EVA02-Large by default) on your GPU via
-  DirectML (Windows: AMD, NVIDIA, Intel) or CUDA, with automatic CPU fallback.
-- **Analyze a Danbooru URL**: exact tags from the API, including artist,
-  series and characters, plus a preview of the post image (which you can
-  also run through the tagger). Danbooru "meta" tags that describe the post
-  rather than the picture (`commentary`, `translated`, `bad_id`…) are left
-  out; `highres` and `absurdres` are kept.
-- **Pick the tags you want**: uncheck tags and the prompt rebuilds itself.
-- **No watermarks or signatures**: tags about text and marks on the picture
-  (`watermark`, `signature`, `artist name`, `patreon username`,
-  `twitter username`, `web address`, logos, `dated`…) and censorship tags
-  (`censored`, `uncensored`, `censorship`, `mosaic censoring`, `bar censor`…)
-  are always left out, so the model does not draw them. The artist tags of Danbooru posts are left
-  out too, unless *Settings → Output → Keep artist tags* is on.
-- **Characters & artists (offline)**: search ~245,000 Danbooru characters and
-  ~420,000 artists in a local database, and add a character (name, series and
-  appearance tags) or an artist (`@name`) to the tag list with one click.
-- **Swap the character**: *Remove character tags* unchecks the tags that
-  describe who is in the picture (name, series, hair, eyes, ears, wings…) and
-  what they wear (clothes, shoes, accessories), and keeps pose, expression
-  and background, so you can put a different character, with their own
-  outfit, into the same scene.
-- **Refine with an LLM** (optional): clean up and enrich the tags, or rewrite
-  them as a natural-language prompt.
-- **Expand an idea**: describe a scene in any language and get a full tag set.
-- **Send to Forge**: positive, negative, or both, straight into txt2img/img2img.
-- **Default prompts**: a prefix (quality tags, LoRAs…) added to every prompt,
+### Get the tags
+- **Tag an image** — drop or paste (Ctrl+V) a picture and press *Tag image*.
+  A WD v3 tagger (EVA02-Large by default) reads it **on your PC**: on the GPU
+  through DirectML (Windows: AMD, NVIDIA, Intel) or CUDA, or on the CPU.
+  Nothing is uploaded.
+- **Analyze a Danbooru link** — paste a Danbooru post
+  (`https://danbooru.donmai.us/posts/…`) and press *Analyze URL*: you get the exact tags of the post, already split into
+  character, series, artist and general, plus a preview of the image (which
+  you can then run through the tagger too).
+- **Paste Danbooru post data** — when Danbooru blocks automatic requests
+  (Cloudflare's "Just a moment…" check), open the post in your browser,
+  copy the whole page and paste it here: the same tags are read from the copied text.
+- **Expand an idea** — write a scene in any language ("a witch under the
+  moon") and your language model turns it into a full tag set.
+
+### Characters and artists
+- **Offline character/artist search** — about 245,000 Danbooru characters and
+  420,000 artists in a local database: search by name, appearance
+  (`blue hair, twintails`) or series, sorted by popularity. *Add to tags*
+  puts the character's name, series and appearance tags (or the artist as
+  `@name`) at the top of the tag list. Searching never uses the internet.
+- **Swap the character** — *Remove character tags* unchecks everything that
+  describes who is in the picture (name, series, hair, eyes, ears, wings…)
+  and what they wear (clothes, shoes, accessories), and keeps pose,
+  expression and background. Add another character from the search and you
+  get the same scene with a different character. Adding a character does
+  this automatically (it can be turned off).
+
+### Clean, controllable prompts
+- **Pick the tags you want** — every tag is a checkbox; uncheck one and the
+  prompt rebuilds itself.
+- **No unwanted text in the picture** — tags that would make the model draw
+  text or marks are always left out: `watermark`, `signature`,
+  `artist name`, `patreon username`, `twitter username`, `web address`,
+  logos, `dated`, `english text`, `japanese text`…, `speech bubble`,
+  `thought bubble`, and censorship tags (`censored`, `uncensored`,
+  `mosaic censoring`, `bar censor`…). The artist tags of posts are left out
+  too, unless you turn on *Settings → Output → Keep artist tags*.
+- **Default prompts** — a prefix added to every prompt (quality tags, LoRAs…)
   and a default negative prompt.
-- **Bring your own inference server**: any OpenAI-compatible endpoint.
-- **Optional local llama.cpp management**: start the model only when you
-  need it, and stop it automatically when you press Generate so the GPU is free.
+- **Refine with an LLM** (optional) — clean up and enrich the tags, or rewrite
+  them as a natural-language prompt.
+- **Send to Forge** — positive, negative or both, straight into the txt2img or
+  img2img prompt fields.
+
+### Your PC, your choice
+- **Any language model server** — LM Studio, Ollama, Jan, llama.cpp,
+  KoboldCpp, a remote provider… anything OpenAI-compatible. Only needed for
+  *Refine* and *Expand idea*; everything else works without it.
+- **GPU friendly** — the tagger and an optional llama.cpp server started by the
+  extension are unloaded/stopped when you press **Generate**, so image
+  generation gets the whole GPU.
+- **Private by design** — no telemetry, the WebUI environment is never
+  modified, and network requests happen only when you press a button (see
+  *Privacy* and *Security checks* below).
 
 ## Installation
 
@@ -64,14 +88,91 @@ plain Danbooru tags, so it works with any tag-based model.
    into the extension's own `vendor/` folder. **The WebUI virtual environment
    is not modified.** On Linux/macOS the onnxruntime already in the WebUI
    environment is used.
-3. Open **txt2img**, scroll to the extensions area and expand
-   **Anima Prompt Studio**.
-4. Open **Settings → Tagger** and press **Download model** (once, ~1.2 GB for
-   EVA02-Large; smaller models are in the list), or point *Custom model folder*
-   to a folder that already contains `model.onnx` and `selected_tags.csv`.
-5. For the character/artist search: open **Settings → Tag browser** and press
-   **Download data** (once, ~70 MB), or copy the files yourself (see
-   *Characters & artists* below).
+
+## First-time guide
+
+About ten minutes, once. Everything happens in the **txt2img** tab: scroll
+down to the extensions area and expand **Anima Prompt Studio**.
+
+### 1. Download what the extension needs (once)
+
+1. Open **Settings → Tagger** and press **Download model** (~1.2 GB for
+   EVA02-Large; smaller models are in the list). Wait for "downloaded".
+   - **From where:** Hugging Face, the public repository of the model chosen
+     in *Model* — by default
+     [SmilingWolf/wd-eva02-large-tagger-v3](https://huggingface.co/SmilingWolf/wd-eva02-large-tagger-v3).
+     Only two files are downloaded:
+     `https://huggingface.co/<model>/resolve/main/model.onnx` and
+     `…/selected_tags.csv`. No account or login is needed.
+   - **To where:** `models/<model name>/` inside the extension folder (e.g.
+     `extensions/anima-prompt-studio/models/wd-eva02-large-tagger-v3/`).
+   - If you already have a WD v3 model, set *Custom model folder* to the
+     folder with `model.onnx` and `selected_tags.csv` instead: nothing is
+     downloaded.
+2. Open **Settings → Tag browser** and press **Download data** (~70 MB). The
+   status shows "database built: … characters, … artists" when it is ready.
+   - **From where:** Hugging Face, the public dataset
+     [Laxhar/noob-wiki](https://huggingface.co/datasets/Laxhar/noob-wiki).
+     Only two files are downloaded:
+     `https://huggingface.co/datasets/Laxhar/noob-wiki/resolve/main/danbooru_character.csv`
+     and `…/danbooru_artist.csv`. No account or login is needed.
+   - **To where:** `data/noob-wiki/` inside the extension folder (or the
+     *Data folder* set in the same tab). The search database
+     `data/tags.sqlite` is then built from them on your PC.
+   - To download them by hand instead, see *Characters & artists → Data*
+     below.
+3. Optional: open **Default prompts**, write your quality tags or LoRAs in
+   *Prefix* (e.g. `masterpiece, best quality`) and your negative prompt, and
+   press **Save as default**.
+
+### 2. Your first prompt from a picture
+
+1. Drop an image into **Image** (or click the clipboard icon / press Ctrl+V).
+2. Press **Tag image**. The first time the model loads (a few seconds); the
+   status line then shows how many tags were found and whether the GPU was
+   used.
+3. Look at the tag list: uncheck what you don't want. The **Positive prompt**
+   box updates by itself.
+4. Press **Send positive to Forge** (or *Send both*), then **Generate** as usual.
+
+### 3. From a Danbooru post
+
+1. Paste the post link into **Danbooru post URL** and press
+   **Analyze URL**. The tags and the image preview appear.
+2. If the status line says that Cloudflare is blocking the request: click the
+   link it shows, press **Ctrl+A** then **Ctrl+C** in your browser, paste into
+   **Paste Danbooru post data** (just below) and press **Read pasted data**.
+3. Uncheck what you don't want, then **Send positive to Forge**.
+
+### 4. Put another character in the same scene
+
+1. Get the tags of a picture or post (steps 2 or 3).
+2. Open **Characters & artists (offline)**, type a name (e.g. `frieren`) and
+   press **Search**. Click a row: you see its appearance tags and, if
+   available, a thumbnail.
+3. Press **Add to tags**. The original character's name, look and outfit are
+   unchecked and the new character is added at the top; pose, expression and
+   background stay. (To keep the original tags, untick *Remove the image's
+   character tags when adding a character* first.)
+4. Want an artist's style too? Switch *Type* to **Artists**, search, click a
+   row and press **Add to tags** (it is added as `@name`).
+5. **Send positive to Forge** and generate.
+
+You can also use **Remove character tags** on its own, next to *Refine with
+LLM*, and **Remove from tags** to take back the character or artist you
+added.
+
+### 5. Optional: a language model for *Refine* and *Expand idea*
+
+1. Start your server (LM Studio, Ollama, Jan…) and load a model.
+2. In **Settings → Inference server**, set its address (examples in
+   *Inference server examples* below), press **Fetch models / test
+   connection**, pick the model and press **Save settings**.
+3. Now **Refine with LLM** cleans up the tag list (or writes a sentence with
+   *as natural language*), and **Expand idea** turns a description in any
+   language into tags.
+
+If something does not work, see *Troubleshooting* at the end.
 
 ## Settings
 
@@ -313,8 +414,11 @@ reasoning are not affected at all.
 - Network requests happen only when you ask for them:
   - Danbooru: the post you pasted, and its image for the preview
     (`danbooru.donmai.us`, `cdn.donmai.us`);
-  - Hugging Face: the tagger model files, when you press *Download model*,
-    and the two character/artist CSV files, when you press *Download data*;
+  - Hugging Face (`huggingface.co`, which hands large files to its own
+    download servers): the tagger model files from the `SmilingWolf/…`
+    repository you chose, when you press *Download model*, and the two
+    character/artist CSV files from the `Laxhar/noob-wiki` dataset, when you
+    press *Download data*;
   - your inference server: the tags/idea you send to it, at the URL you set;
   - PyPI: `onnxruntime-directml`, once, on Windows during install.
 - Searching characters and artists never uses the network: it reads the
@@ -371,8 +475,8 @@ point is in the code and can be checked there.
   (`*.donmai.us`), whatever URL the API answer contains.
 - Cloudflare's anti-bot check is never bypassed: when it answers, the
   extension stops and offers *Paste Danbooru post data*, where your own
-  browser fetches the page. The pasted text is only read as JSON data (it is
-  never run) and must look like a Danbooru post.
+  browser fetches the page. The pasted text is only read as data (JSON or
+  plain text, never run) and must look like a Danbooru post.
 - Hugging Face: only the fixed file names of the chosen tagger model and of
   the `Laxhar/noob-wiki` dataset are requested; nothing about you is sent.
   Downloads go to a `.part` file first, so an interrupted download never

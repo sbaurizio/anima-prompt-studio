@@ -14,7 +14,11 @@ UNWANTED = re.compile(
     r"artist name|character name|copyright name|group name|dated|username|"
     rf"{_SITES} (?:username|logo|reward|id)|{_SITES}|artist logo|company logo|"
     r"web address|url|copyright notice|commission(?:er name)?|"
-    r"paid reward(?: available)?|reward available|logo)$"
+    r"paid reward(?: available)?|reward available|logo|"
+    # writing and speech balloons drawn on the picture
+    r"(?:english|japanese|chinese|korean|russian|spanish|french|german|"
+    r"translated|engrish|romaji) text|"
+    r"speech bubble|thought bubble|spoken (?:heart|ellipsis|question mark|exclamation mark|musical note))$"
 )
 
 
