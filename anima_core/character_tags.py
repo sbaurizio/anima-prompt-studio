@@ -60,24 +60,29 @@ _CLOTHING_WORDS = {
     "footwear", "sandals", "heels", "sneakers", "loafers", "slippers", "gloves",
     "mittens", "hat", "cap", "beret", "hood", "helmet", "headwear", "headband",
     "hairband", "headdress", "headpiece", "crown", "tiara", "veil", "ribbon",
-    "bow", "bowtie", "necktie", "tie", "ascot", "scarf", "choker", "collar",
+    "bowtie", "necktie", "tie", "ascot", "scarf", "choker", "collar",
     "necklace", "pendant", "brooch", "earrings", "jewelry", "bracelet", "anklet",
-    "ring", "belt", "sash", "obi", "suspenders", "capelet", "cape", "cloak",
+    "belt", "sash", "obi", "suspenders", "capelet", "cape", "cloak",
     "coat", "jacket", "hoodie", "sweater", "cardigan", "vest", "uniform",
     "serafuku", "kimono", "yukata", "hakama", "armor", "apron", "leotard",
     "bodysuit", "swimsuit", "bikini", "bra", "panties", "underwear", "lingerie",
     "corset", "garter", "straps", "sleeves", "clothes", "clothing", "outfit",
     "costume", "glasses", "eyewear", "sunglasses", "goggles", "mask", "hairclip",
-    "hairpin", "ornament", "wristband", "armband", "epaulettes", "buttons",
+    "hairpin", "wristband", "armband", "epaulettes", "buttons",
     "frills", "lace", "tabard", "harness", "earmuffs", "neckerchief",
 }
 _CLOTHING_TAGS = {"sleeveless", "crop top", "tank top", "tube top", "hair flower",
-                  "off shoulder", "garter belt", "garter straps", "thigh boots"}
+                  "off shoulder", "garter belt", "garter straps", "thigh boots",
+                  "ring", "wedding ring", "bow", "back bow"}
+# "ring", "ornament" and "bow" alone at the end are often objects or places
+# ("boxing ring", "christmas ornament", "gift bow"): only these endings are worn
+_CLOTHING_ENDINGS = ("hair ornament", "hair bow", "hair ring", "ear ornament", "ribbon bow")
 
 
 def is_clothing(tag: str) -> bool:
     k = key(tag)
-    return k in _CLOTHING_TAGS or (k.split(" ")[-1] if k else "") in _CLOTHING_WORDS
+    return (k in _CLOTHING_TAGS or k.endswith(_CLOTHING_ENDINGS)
+            or (k.split(" ")[-1] if k else "") in _CLOTHING_WORDS)
 
 
 def key(tag: str) -> str:

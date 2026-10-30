@@ -18,6 +18,9 @@ from . import __version__
 
 USER_AGENT = f"AnimaPromptStudio/{__version__} (Stable Diffusion WebUI extension)"
 
+# a preview is a resized sample (a few hundred KB): never download more than this
+PREVIEW_MAX_BYTES = 15 * 1024 * 1024
+
 DANBOORU_HOSTS = {
     "danbooru.donmai.us", "betabooru.donmai.us", "sonohara.donmai.us",
     "testbooru.donmai.us", "hijiribe.donmai.us",
@@ -92,10 +95,11 @@ def result_from_json(data: dict, host: str = "danbooru.donmai.us") -> BooruResul
     res.character = _t(data.get("tag_string_character"))
     res.general = _t(data.get("tag_string_general"))
     res.meta = _t(data.get("tag_string_meta"))
-    # the resized "sample" is enough for a preview; videos/animations only
-    # have a still image in preview_file_url
+    # the resized "sample" is enough for a preview, else the small thumbnail
+    # (also the only still image of videos). The original file (file_url) is
+    # never downloaded: it can be tens of megabytes.
     if str(data.get("file_ext") or "").lower() in ("jpg", "jpeg", "png", "webp", "gif"):
-        res.preview_url = str(data.get("large_file_url") or data.get("file_url") or "")
+        res.preview_url = str(data.get("large_file_url") or "")
     if not res.preview_url:
         res.preview_url = str(data.get("preview_file_url") or "")
     res.raw = data
@@ -152,11 +156,15 @@ def parse_page_text(text: str) -> BooruResult:
     groups: dict[str, list[str]] = {k: [] for k in set(_SECTIONS.values())}
     current = None
     post_id = rating = ""
-    for raw in text.splitlines():
-        line = raw.strip()
+    lines = [raw.strip() for raw in text.splitlines()]
+    for i, line in enumerate(lines):
         low = line.lower()
         if low in _SECTIONS:
-            current = _SECTIONS[low]
+            # a real tag-list heading is followed by tag lines, which start with
+            # the "?" wiki link; the same words in the site menu ("Artists",
+            # followed by "Tags") are not
+            nxt = next((n for n in lines[i + 1:] if n), "")
+            current = _SECTIONS[low] if nxt.startswith("?") else None
             continue
         if low in _STOP:
             current = None
@@ -237,8 +245,13 @@ class BooruClient:
         host = (u.hostname or "").lower()
         if u.scheme != "https" or not (host == "donmai.us" or host.endswith(".donmai.us")):
             raise RuntimeError(f"preview not on Danbooru's servers: {host or url!r}")
-        r = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=30)
-        r.raise_for_status()
-        img = Image.open(BytesIO(r.content))
+        with requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=30, stream=True) as r:
+            r.raise_for_status()
+            data = bytearray()
+            for chunk in r.iter_content(chunk_size=256 * 1024):
+                data += chunk
+                if len(data) > PREVIEW_MAX_BYTES:
+                    raise RuntimeError("preview image too large")
+        img = Image.open(BytesIO(bytes(data)))
         img.load()
         return img

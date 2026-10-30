@@ -187,23 +187,30 @@ def download_data(dest: pathlib.Path) -> Iterator[str]:
     """Download the two CSV files from Hugging Face into dest/noob-wiki.
 
     Only these two public files are requested; nothing about the user is sent.
+    Both are downloaded first and replace the old ones only when both arrived,
+    so a failed download never leaves new and old files mixed.
     """
     dest = pathlib.Path(dest) / "noob-wiki"
     dest.mkdir(parents=True, exist_ok=True)
-    for name in (CHAR_CSV, ARTIST_CSV):
-        part = dest / (name + ".part")
-        with requests.get(HF_DATASET + name, stream=True, timeout=60) as r:
-            r.raise_for_status()
-            done, last = 0, 0.0
-            with open(part, "wb") as fh:
-                for chunk in r.iter_content(chunk_size=1024 * 1024):
-                    fh.write(chunk)
-                    done += len(chunk)
-                    if time.time() - last > 1.0:
-                        last = time.time()
-                        yield f"{name}: {done / 1e6:.0f} MB"
-        part.replace(dest / name)
-        yield f"{name}: done"
+    parts = {name: dest / (name + ".part") for name in (CHAR_CSV, ARTIST_CSV)}
+    try:
+        for name, part in parts.items():
+            with requests.get(HF_DATASET + name, stream=True, timeout=60) as r:
+                r.raise_for_status()
+                done, last = 0, 0.0
+                with open(part, "wb") as fh:
+                    for chunk in r.iter_content(chunk_size=1024 * 1024):
+                        fh.write(chunk)
+                        done += len(chunk)
+                        if time.time() - last > 1.0:
+                            last = time.time()
+                            yield f"{name}: {done / 1e6:.0f} MB"
+            yield f"{name}: downloaded"
+        for name, part in parts.items():
+            part.replace(dest / name)
+    finally:
+        for part in parts.values():
+            part.unlink(missing_ok=True)
 
 
 def _sanitize_filename(name: str) -> str:

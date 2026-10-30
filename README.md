@@ -54,7 +54,7 @@ plain Danbooru tags, so it works with any tag-based model.
   text or marks are always left out: `watermark`, `signature`,
   `artist name`, `patreon username`, `twitter username`, `web address`,
   logos, `dated`, `english text`, `japanese text`…, `speech bubble`,
-  `thought bubble`, and censorship tags (`censored`, `uncensored`,
+  `thought bubble`, `sound effects`, `onomatopoeia`, `subtitled`, and censorship tags (`censored`, `uncensored`,
   `mosaic censoring`, `bar censor`…). The artist tags of posts are left out
   too, unless you turn on *Settings → Output → Keep artist tags*.
 - **Default prompts** — a prefix added to every prompt (quality tags, LoRAs…)

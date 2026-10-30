@@ -260,6 +260,10 @@ _CSS = """
     line-height: 1.22;
 }
 #anima_img_txt2img video, #anima_img_img2img video { object-fit: contain; }
+/* results are already sorted by popularity; sorting by a header click would
+   reorder the rows on screen only, and a click would then pick the wrong one */
+#anima_br_txt2img thead, #anima_br_img2img thead { pointer-events: none; }
+#anima_br_txt2img thead .sort-button, #anima_br_img2img thead .sort-button { display: none; }
 """
 
 # Gradio 4's table draws only the rows in view: if it is scrolled down when
@@ -587,6 +591,13 @@ def do_browse_select(mode, rows, with_tags, index):
         except Exception as exc:
             _log(f"thumbnail: {exc}")
     return image, info, ", ".join(tb.entry_tags(mode, row, with_tags))
+
+
+def do_browse_retag(mode, rows, with_tags, index):
+    """'Include appearance tags' toggled: only the tags to add change."""
+    if index is None or not rows or int(index) >= len(rows):
+        return gr.update()
+    return ", ".join(tb.entry_tags(mode, rows[int(index)], with_tags))
 
 
 def do_browse_add(mode, text, checked, meta, replace, strip):
@@ -1009,8 +1020,8 @@ class AnimaPromptStudio(scripts.Script):
                                                           js=js_top)
             br_results.select(do_browse_click, [br_mode, br_rows, br_with_tags],
                               [br_thumb, br_info, br_text, br_sel])
-            br_with_tags.change(do_browse_select, [br_mode, br_rows, br_with_tags, br_sel],
-                                [br_thumb, br_info, br_text])
+            br_with_tags.change(do_browse_retag, [br_mode, br_rows, br_with_tags, br_sel],
+                                [br_text])
             btn_br_add.click(do_browse_add,
                              [br_mode, br_text, tag_box, tags_meta, br_replace, br_strip],
                              [tag_box, pos_box, tags_meta, br_status])

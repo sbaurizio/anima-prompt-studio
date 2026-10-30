@@ -12,13 +12,14 @@ _SITES = r"(?:patreon|twitter|pixiv|fanbox|fantia|instagram|weibo|tumblr|deviant
 UNWANTED = re.compile(
     r"^(?:(?:sample |text |artist )?watermark|watermarked|signature|artist signature|"
     r"artist name|character name|copyright name|group name|dated|username|"
-    rf"{_SITES} (?:username|logo|reward|id)|{_SITES}|artist logo|company logo|"
+    rf"{_SITES} (?:username|logo|reward|id)|artist logo|company logo|"
     r"web address|url|copyright notice|commission(?:er name)?|"
     r"paid reward(?: available)?|reward available|logo|"
     # writing and speech balloons drawn on the picture
     r"(?:english|japanese|chinese|korean|russian|spanish|french|german|"
     r"translated|engrish|romaji) text|"
-    r"speech bubble|thought bubble|spoken (?:heart|ellipsis|question mark|exclamation mark|musical note))$"
+    r"speech bubble|thought bubble|spoken (?:heart|ellipsis|question mark|exclamation mark|musical note)|"
+    r"sound effects|onomatopoeia|subtitled|text focus)$"
 )
 
 
